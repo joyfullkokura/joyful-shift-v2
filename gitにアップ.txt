@@ -1,0 +1,8 @@
+# 1. 変更したファイルを全部準備
+git add .
+
+# 2. 保存メッセージを書く（何をしたかメモ）
+git commit -m "カレンダー機能の実装"
+
+# 3. GitHubへ送信！
+git push origin main
