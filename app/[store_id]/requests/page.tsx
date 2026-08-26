@@ -161,58 +161,68 @@ export default function RequestsPage() {
   // A. 名前選択画面
   if (!selectedStaff) {
     return (
-      <div className="p-4 max-w-md mx-auto min-h-screen">
+      // p-8 を除去し、w-full を追加。px-2 で左右に最低限の遊びを作ります
+      <div className="w-full max-w-md mx-auto min-h-screen px-2 py-4">
+        
         {/* タイトル & 月切り替えヘッダー */}
         <div className="flex flex-col items-center mb-8 gap-4">
-          <h1 className="text-xl md:text-2xl font-black text-gray-800 text-center">
-             {targetYear}年 {targetMonth}月<br />
-             <span className="text-orange-600">休み希望入力</span>
-          </h1>
+          <div className="text-center">
+            <p className="text-gray-500 font-bold text-lg mb-1">{targetYear}年</p>
+            <h1 className="text-3xl font-black text-gray-800 leading-tight">
+              {targetMonth}月 <span className="text-orange-600">休み希望入力</span>
+            </h1>
+          </div>
           
-          <div className="flex justify-between w-full items-center gap-2">
+          {/* 月切り替えボタン：w-fullで左右いっぱいに広げる */}
+          <div className="flex justify-between w-full items-center gap-3 px-2">
             <button 
               onClick={() => changeMonth(-1)}
-              className="flex-1 bg-gray-100 text-gray-500 py-2 rounded-xl text-xs font-bold active:bg-gray-200"
+              className="flex-1 bg-white border border-gray-200 text-gray-500 py-3 rounded-2xl text-xs font-bold shadow-sm active:bg-gray-50"
             >
               ← {targetMonth === 1 ? 12 : targetMonth - 1}月閲覧
             </button>
-            <div className="w-1 h-1 bg-gray-200 rounded-full"></div>
             <button 
               onClick={() => changeMonth(1)}
-              className="flex-1 bg-orange-50 text-orange-600 py-2 rounded-xl text-xs font-bold active:bg-orange-100"
+              className="flex-1 bg-white border border-orange-100 text-orange-600 py-3 rounded-2xl text-xs font-bold shadow-sm active:bg-orange-50"
             >
               {targetMonth === 12 ? 1 : targetMonth + 1}月へ →
             </button>
           </div>
         </div>
 
-        {/* 過去月ならスタッフボタンを隠して案内を出す */}
+        {/* スタッフボタン：w-fullで左右の余白を均等にする */}
         {isReadOnly ? (
-          <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 text-center mb-8">
-            <p className="text-blue-600 font-bold text-sm">以前の月は閲覧のみ可能です</p>
-            <p className="text-blue-400 text-[10px] mt-1">自分のボタンからの編集はできません</p>
+          <div className="bg-blue-50 p-8 rounded-[2rem] border border-blue-100 text-center mb-8 mx-2">
+            <p className="text-blue-600 font-bold">閲覧のみ可能です</p>
+            <p className="text-blue-400 text-xs mt-2">以前の月は編集できません</p>
           </div>
         ) : (
-          <div className="grid gap-3 mb-12">
+          <div className="grid gap-3 mb-12 px-2">
             {staff.map((p) => (
-              <button key={p.id} onClick={() => setSelectedStaff(p)} className="w-full bg-white p-5 rounded-2xl shadow-sm border border-gray-100 font-bold text-gray-700 text-lg flex justify-between items-center active:scale-95 transition-all">
-                {p.name}<span className="text-orange-300">→</span>
+              <button 
+                key={p.id} 
+                onClick={() => setSelectedStaff(p)} 
+                className="w-full bg-white p-6 rounded-[1.5rem] shadow-sm border border-gray-100 font-bold text-gray-700 text-xl flex justify-between items-center active:scale-[0.98] transition-all"
+              >
+                {p.name}
+                <span className="text-orange-300">→</span>
               </button>
             ))}
           </div>
         )}
 
         {/* 管理者用エリア */}
-        <div className="pt-6 border-t border-gray-100">
-          <div className="grid gap-2">
-            <button onClick={() => setShowOverview(!showOverview)} className="w-full bg-gray-800 text-white py-3 rounded-xl text-xs font-bold shadow-md">
-              {showOverview ? '全体状況を隠す' : '🔍 全体の休み状況を確認'}
+        <div className="pt-8 border-t border-gray-100 px-2">
+          <div className="grid gap-3">
+            <button onClick={() => setShowOverview(!showOverview)} className="w-full bg-gray-800 text-white py-4 rounded-2xl text-sm font-bold shadow-lg">
+              {showOverview ? '全体状況を隠す' : '🔍 全体の状況を確認'}
             </button>
-            <button onClick={exportToExcel} className="w-full bg-green-600 text-white py-3 rounded-xl text-xs font-bold shadow-md">
+            <button onClick={exportToExcel} className="w-full bg-green-600 text-white py-4 rounded-2xl text-sm font-bold shadow-lg">
               📥 {targetMonth}月分をExcel出力
             </button>
           </div>
         </div>
+
 
         {showOverview && (
           <div className="mt-8 overflow-x-auto bg-white p-2 rounded-xl shadow-inner border border-gray-50">
