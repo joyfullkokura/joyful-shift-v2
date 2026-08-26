@@ -93,7 +93,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
       </nav>
 
       {/* メインコンテンツエリア */}
-      <main className="flex-1 md:ml-64 px-0 md:px-10 pb-24 md:pb-10">
+      <main className="flex-1 md:ml-64 w-full max-w-full overflow-x-hidden px-0 md:px-10 pb-24 md:pb-10">
         {children}
       </main>
     </div>
