@@ -1,14 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useParams, usePathname } from 'next/navigation' // usePathnameを追加
+import { useParams, usePathname } from 'next/navigation'
 import { useState, useEffect, ReactNode } from 'react'
 import { AdminProvider, useAdmin } from '@/context/AdminContext'
 import { supabase } from '@/lib/supabase'
 
 function StoreLayoutContent({ children }: { children: ReactNode }) {
   const params = useParams()
-  const pathname = usePathname() // 現在のURLパスを取得
+  const pathname = usePathname()
   const storeId = params.store_id as string
   const { isAdmin, setIsAdmin } = useAdmin()
   const [password, setPassword] = useState('')
@@ -32,7 +32,6 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
     checkAuth()
   }, [password, storeId, setIsAdmin])
 
-  // ナビゲーション項目の定義
   const navItems = [
     { name: 'ホーム', href: `/${storeId}`, icon: '🏠' },
     { name: '休み希望', href: `/${storeId}/requests`, icon: '📅' },
@@ -41,7 +40,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-gray-50 text-gray-900 font-sans">
-      {/* --- 【PC用】サイドバー（md以上で表示） --- */}
+      {/* --- 【PC用】サイドバー --- */}
       <aside className="w-64 bg-orange-600 text-white p-6 shadow-xl hidden md:flex flex-col fixed h-full z-40">
         <h2 className="text-xl font-bold mb-1 flex items-center gap-2">🏪 Joyful Shift V2</h2>
         <p className="text-orange-100 text-[10px] font-bold mb-8 uppercase tracking-widest">{storeName || storeId}</p>
@@ -56,10 +55,28 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
               {item.icon} {item.name}
             </Link>
           ))}
-          {/* 名簿はPC（店長）メインなのでここだけに表示 */}
-          <Link href={`/${storeId}/staff`} className={`block p-2 rounded transition-all ${pathname.includes('/staff') ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}>
-            👥 従業員名簿
-          </Link>
+
+          {/* --- 管理者専用メニュー --- */}
+          {isAdmin && (
+            <div className="pt-4 mt-4 border-t border-orange-400 space-y-4">
+              <p className="text-[10px] text-orange-200 font-bold uppercase tracking-widest">管理者メニュー</p>
+              
+              <Link 
+                href={`/${storeId}/staff`} 
+                className={`block p-2 rounded transition-all ${pathname.includes('/staff') ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}
+              >
+                👥 従業員名簿
+              </Link>
+              
+              {/* ★ここに追加：シフト自動生成 */}
+              <Link 
+                href={`/${storeId}/generate`} 
+                className={`block p-2 rounded transition-all ${pathname.includes('/generate') ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}
+              >
+                🤖 シフト自動生成
+              </Link>
+            </div>
+          )}
         </nav>
         
         <div className="mt-auto pt-6 border-t border-orange-400">
@@ -79,7 +96,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* --- 【スマホ用】ボトムナビ（md未満で表示） --- */}
+      {/* --- 【スマホ用】ボトムナビ（変更なし：生成メニューは出さない） --- */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-gray-200 flex justify-around items-center p-2 pb-6 z-50">
         {navItems.map((item) => {
           const isActive = pathname === item.href
