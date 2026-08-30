@@ -32,6 +32,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
     checkAuth()
   }, [password, storeId, setIsAdmin])
 
+  // 従業員も使う基本メニュー
   const navItems = [
     { name: 'ホーム', href: `/${storeId}`, icon: '🏠' },
     { name: '休み希望', href: `/${storeId}/requests`, icon: '📅' },
@@ -40,7 +41,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-gray-50 text-gray-900 font-sans">
-      {/* --- 【PC用】サイドバー --- */}
+      {/* --- 【PC用】サイドバー（md以上で表示） --- */}
       <aside className="w-64 bg-orange-600 text-white p-6 shadow-xl hidden md:flex flex-col fixed h-full z-40">
         <h2 className="text-xl font-bold mb-1 flex items-center gap-2">🏪 Joyful Shift V2</h2>
         <p className="text-orange-100 text-[10px] font-bold mb-8 uppercase tracking-widest">{storeName || storeId}</p>
@@ -50,35 +51,42 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
             <Link 
               key={item.href} 
               href={item.href} 
-              className={`block p-2 rounded transition-all ${pathname === item.href ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}
+              className={`block p-2 rounded transition-all ${pathname === item.href ? 'bg-orange-700 font-bold shadow-inner' : 'hover:bg-orange-500'}`}
             >
               {item.icon} {item.name}
             </Link>
           ))}
 
-          {/* --- 管理者専用メニュー --- */}
+          {/* --- 管理者専用メニュー（パスワード認証時のみ出現） --- */}
           {isAdmin && (
-            <div className="pt-4 mt-4 border-t border-orange-400 space-y-4">
-              <p className="text-[10px] text-orange-200 font-bold uppercase tracking-widest">管理者メニュー</p>
+            <div className="pt-6 mt-6 border-t border-orange-400/50 space-y-2">
+              <p className="text-[10px] text-orange-200 font-black uppercase tracking-widest mb-4">Manager Menu</p>
               
               <Link 
                 href={`/${storeId}/staff`} 
-                className={`block p-2 rounded transition-all ${pathname.includes('/staff') ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}
+                className={`block p-2 rounded transition-all ${pathname.includes('/staff') ? 'bg-orange-700 font-bold shadow-inner' : 'hover:bg-orange-500'}`}
               >
                 👥 従業員名簿
               </Link>
               
-              {/* ★ここに追加：シフト自動生成 */}
               <Link 
                 href={`/${storeId}/generate`} 
-                className={`block p-2 rounded transition-all ${pathname.includes('/generate') ? 'bg-orange-700 font-bold' : 'hover:bg-orange-500'}`}
+                className={`block p-2 rounded transition-all ${pathname.includes('/generate') ? 'bg-orange-700 font-bold shadow-inner' : 'hover:bg-orange-500'}`}
               >
                 🤖 シフト自動生成
+              </Link>
+
+              <Link 
+                href={`/${storeId}/cleaning`} 
+                className={`block p-2 rounded transition-all ${pathname.includes('/cleaning') ? 'bg-orange-700 font-bold shadow-inner' : 'hover:bg-orange-500'}`}
+              >
+                🧹 清掃記録
               </Link>
             </div>
           )}
         </nav>
         
+        {/* パスワード入力エリア */}
         <div className="mt-auto pt-6 border-t border-orange-400">
           <label className="text-[10px] text-orange-200 uppercase tracking-widest block mb-2 font-bold">管理者パスワード</label>
           <input
@@ -89,14 +97,14 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
             onChange={(e) => setPassword(e.target.value)}
           />
           {isAdmin && (
-            <div className="flex items-center gap-2 mt-3 text-white bg-orange-500/50 p-2 rounded-lg animate-pulse">
-              <span className="text-xs font-black">🔓 ADMIN MODE</span>
+            <div className="flex items-center gap-2 mt-3 text-white bg-green-500/80 p-2 rounded-lg">
+              <span className="text-[10px] font-black italic">ADMIN AUTHENTICATED</span>
             </div>
           )}
         </div>
       </aside>
 
-      {/* --- 【スマホ用】ボトムナビ（変更なし：生成メニューは出さない） --- */}
+      {/* --- 【スマホ用】ボトムナビ（生成メニューは出さない） --- */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-gray-200 flex justify-around items-center p-2 pb-6 z-50">
         {navItems.map((item) => {
           const isActive = pathname === item.href
