@@ -1,160 +1,230 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useParams } from 'next/navigation'
 
-interface Store {
-  id: string; store_id: string; name: string;
-  group_options: string; open_time: string; close_time: string;
-  target_mh_per_day: number;
-}
+// --- 定数定義 ---
+const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2)
+  const m = i % 2 === 0 ? '00' : '30'
+  return `${String(h).padStart(2, '0')}:${m}`
+})
 
-interface ShiftSlot {
-  id: string;
-  group: string;
-  startTime: string;
-  endTime: string;
+interface Slot {
+  start: string
+  end: string
 }
 
 export default function GeneratePage() {
   const params = useParams()
   const storeId = params.store_id as string
-  const [storeInfo, setStoreInfo] = useState<Store | null>(null)
-  const [slots, setSlots] = useState<ShiftSlot[]>([])
+  const [storeInfo, setStoreInfo] = useState<any>(null)
+  const [wMembers, setWMembers] = useState<any[]>([])
+  
+  // 1. 基本設定の状態
+  const [counts, setCounts] = useState({
+    h_d_wd: 2, k_d_wd: 2, h_n_wd: 3, k_n_wd: 3,
+    h_d_we: 3, k_d_we: 2, h_n_we: 4, k_n_we: 4
+  })
+  
+  // 2. 勤務時間枠（バー）の状態
+  // key例: "weekday-hd-0"
+  const [slots, setSlots] = useState<{[key: string]: Slot}>({})
+  
+  const [activeTab, setActiveTab] = useState<'weekday' | 'weekend'>('weekday')
+  const [isSaving, setIsSaving] = useState(false)
 
-  // 時間の選択肢を生成 (00:00 - 24:00)
-  const timeOptions = Array.from({ length: 49 }, (_, i) => {
-    const h = Math.floor(i / 2);
-    const m = i % 2 === 0 ? "00" : "30";
-    return `${String(h).padStart(2, '0')}:${m}`;
-  });
-
+  // データ読み込み
   useEffect(() => {
-    const fetchStore = async () => {
-      const { data } = await supabase.from('stores').select('*').eq('store_id', storeId).single()
-      if (data) setStoreInfo(data)
+    const init = async () => {
+      // 店舗情報取得
+      const { data: sData } = await supabase.from('stores').select('*').eq('store_id', storeId).single()
+      if (sData) setStoreInfo(sData)
+      
+      // Wグループ取得
+      const { data: stData } = await supabase.from('staff').select('*').eq('store_id', storeId).eq('is_employee', true)
+      setWMembers(stData || [])
     }
-    fetchStore()
+    init()
   }, [storeId])
 
-  // 枠を追加する関数
-  const addSlot = (groupName: string) => {
-    const newSlot: ShiftSlot = {
-      id: Math.random().toString(36).substr(2, 9),
-      group: groupName,
-      startTime: storeInfo?.open_time.slice(0, 5) || "10:00",
-      endTime: "15:00"
-    }
-    setSlots([...slots, newSlot])
+  // --- ヘルパー関数 ---
+  const timeToFloat = (t: string) => {
+    const [h, m] = t.split(':').map(Number)
+    return h + m / 60
   }
 
-  // 枠を削除する関数
-  const removeSlot = (id: string) => {
-    setSlots(slots.filter(s => s.id !== id))
+  // スライダーの値が変更された時
+  const handleSliderChange = (key: string, type: 'start' | 'end', val: string) => {
+    setSlots(prev => ({
+      ...prev,
+      [key]: { ... (prev[key] || { start: '10:00', end: '18:00' }), [type]: val }
+    }))
   }
 
-  // 時間を更新する関数
-  const updateTime = (id: string, field: 'startTime' | 'endTime', value: string) => {
-    setSlots(slots.map(s => s.id === id ? { ...s, [field]: value } : s))
+  // 人時計算 (ReactのuseMemoを使って爆速計算)
+  const totalMH = useMemo(() => {
+    let total = 0
+    Object.values(slots).forEach(s => {
+      const duration = timeToFloat(s.end) - timeToFloat(s.start)
+      if (duration > 0) {
+        // 休憩ルール: 6h超で0.75, 8h超で1.0
+        const brk = duration > 8 ? 1.0 : duration > 6 ? 0.75 : 0
+        total += (duration - brk)
+      }
+    })
+    return total
+  }, [slots])
+
+  if (!storeInfo) return <div className="p-10 animate-pulse text-orange-500">Loading...</div>
+
+  // --- スライダーコンポーネント ---
+  const SlotSlider = ({ id, label }: { id: string, label: string }) => {
+    const slot = slots[id] || { start: '10:00', end: '18:00' }
+    return (
+      <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm mb-3">
+        <div className="flex justify-between items-center mb-4">
+          <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">{label}</span>
+          <span className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-xs font-black">
+            {slot.start} 〜 {slot.end}
+          </span>
+        </div>
+        <div className="flex gap-4">
+          <select 
+            value={slot.start} 
+            onChange={(e) => handleSliderChange(id, 'start', e.target.value)}
+            className="flex-1 bg-gray-50 border-none rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+          >
+            {TIME_OPTIONS.map(t => <option key={t} value={t}>{t} から</option>)}
+          </select>
+          <select 
+            value={slot.end} 
+            onChange={(e) => handleSliderChange(id, 'end', e.target.value)}
+            className="flex-1 bg-gray-50 border-none rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
+          >
+            {TIME_OPTIONS.map(t => <option key={t} value={t}>{t} まで</option>)}
+          </select>
+        </div>
+        {/* バーの視覚表現 */}
+        <div className="mt-4 h-2 bg-gray-100 rounded-full overflow-hidden relative">
+          <div 
+            className="absolute h-full bg-gradient-to-r from-orange-400 to-orange-600"
+            style={{
+              left: `${(timeToFloat(slot.start) / 24) * 100}%`,
+              right: `${100 - (timeToFloat(slot.end) / 24) * 100}%`
+            }}
+          ></div>
+        </div>
+      </div>
+    )
   }
-
-  // 合計人時の計算（V1と同じ計算ロジック）
-  const calculateTotalMH = () => {
-    return slots.reduce((total, s) => {
-      const start = parseInt(s.startTime.split(':')[0]) + (s.startTime.split(':')[1] === '30' ? 0.5 : 0)
-      const end = parseInt(s.endTime.split(':')[0]) + (s.endTime.split(':')[1] === '30' ? 0.5 : 0)
-      let diff = end - start
-      if (diff < 0) diff += 24 // 深夜跨ぎ対応
-      
-      // 休憩時間の簡易計算 (6h超で0.75, 8h超で1.0)
-      let breakTime = 0
-      if (diff > 8) breakTime = 1.0
-      else if (diff > 6) breakTime = 0.75
-      
-      return total + (diff - breakTime)
-    }, 0)
-  }
-
-  if (!storeInfo) return <div className="p-8">読み込み中...</div>
-
-  const groups = storeInfo.group_options.split(',')
 
   return (
-    <div className="p-4 md:p-8 pb-32">
-      <div className="flex justify-between items-center mb-8">
+    <div className="max-w-5xl mx-auto p-4 md:p-8 pb-32">
+      {/* ヘッダーエリア */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
-          <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tighter">Shift Generator</h1>
-          <p className="text-orange-600 font-bold">📍 {storeInfo.name}</p>
+          <h1 className="text-3xl font-black text-gray-800 tracking-tight">🤖 シフト自動生成 <span className="text-orange-500">V2</span></h1>
+          <p className="text-gray-400 font-medium text-sm">店舗設定と勤務パターンの構築</p>
         </div>
-        
-        <div className="bg-white px-6 py-3 rounded-2xl shadow-sm border-2 border-orange-500 text-right">
-          <p className="text-[10px] text-gray-400 font-bold">予想総人時 (休憩差引後)</p>
-          <div className="flex items-baseline justify-end gap-2">
-            <span className="text-3xl font-black text-gray-800">{calculateTotalMH().toFixed(1)}</span>
-            <span className="text-gray-400 font-bold">/ {storeInfo.target_mh_per_day}h</span>
+        <div className="bg-gray-900 text-white p-6 rounded-3xl shadow-2xl flex items-center gap-6">
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">概算総人時 (1日あたり)</p>
+            <p className="text-3xl font-black text-orange-400">{totalMH.toFixed(1)}<span className="text-sm ml-1 text-white">h</span></p>
+          </div>
+          <div className="h-10 w-[1px] bg-gray-700"></div>
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">目標</p>
+            <p className="text-xl font-bold">{storeInfo.target_mh_per_day}h</p>
           </div>
         </div>
       </div>
 
-      <div className="space-y-8">
-        {groups.map((group: string) => (
-          <div key={group} className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-black text-gray-700 flex items-center gap-2">
-                <span className="w-2 h-6 bg-orange-500 rounded-full"></span>
-                {group}
-              </h2>
-              <button 
-                onClick={() => addSlot(group)}
-                className="bg-orange-50 text-orange-600 px-4 py-1.5 rounded-full text-xs font-bold hover:bg-orange-100 transition-all"
-              >
-                ＋ 枠を追加
-              </button>
-            </div>
+      {/* 設定タブ */}
+      <div className="flex bg-gray-200 p-1 rounded-2xl mb-6 w-fit">
+        <button 
+          onClick={() => setActiveTab('weekday')}
+          className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'weekday' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}
+        >
+          🚃 平日 (月〜木)
+        </button>
+        <button 
+          onClick={() => setActiveTab('weekend')}
+          className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'weekend' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}
+        >
+          🌞 金土日祝
+        </button>
+      </div>
 
-            <div className="space-y-3">
-              {slots.filter(s => s.group === group).map((slot, index) => (
-                <div key={slot.id} className="flex items-center gap-4 bg-gray-50 p-3 rounded-2xl border border-gray-100 animate-in slide-in-from-left-2 duration-200">
-                  <span className="text-[10px] font-bold text-gray-400 w-8">{index + 1}人目</span>
-                  
-                  <div className="flex-1 flex items-center gap-2">
-                    <select 
-                      value={slot.startTime} 
-                      onChange={(e) => updateTime(slot.id, 'startTime', e.target.value)}
-                      className="bg-white border-none rounded-lg px-2 py-1 text-sm font-bold shadow-sm focus:ring-2 focus:ring-orange-500 outline-none"
-                    >
-                      {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                    <span className="text-gray-300">〜</span>
-                    <select 
-                      value={slot.endTime} 
-                      onChange={(e) => updateTime(slot.id, 'endTime', e.target.value)}
-                      className="bg-white border-none rounded-lg px-2 py-1 text-sm font-bold shadow-sm focus:ring-2 focus:ring-orange-500 outline-none"
-                    >
-                      {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* 左側：人数設定 */}
+        <div className="space-y-6">
+          <section className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <h3 className="font-black text-gray-700 mb-4 flex items-center gap-2">👥 必要人数の設定</h3>
+            <div className="grid grid-cols-2 gap-4">
+              {['h_d', 'k_d', 'h_n', 'k_n'].map(pos => {
+                const key = `${pos}_${activeTab === 'weekday' ? 'wd' : 'we'}` as keyof typeof counts
+                const label = pos.includes('h') ? 'ホール' : 'キッチン'
+                const time = pos.includes('_d') ? '昼' : '夜'
+                return (
+                  <div key={pos} className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase">{label} {time}</label>
+                    <input 
+                      type="number" 
+                      value={counts[key]} 
+                      onChange={(e) => setCounts({...counts, [key]: parseInt(e.target.value) || 0})}
+                      className="w-full bg-gray-50 border-none rounded-xl p-3 font-bold focus:ring-2 focus:ring-orange-500"
+                    />
                   </div>
+                )
+              })}
+            </div>
+          </section>
 
-                  <button 
-                    onClick={() => removeSlot(slot.id)}
-                    className="text-gray-300 hover:text-red-500 transition-colors"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  </button>
+          {/* 社員目標時間（Wグループ） */}
+          <section className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <h3 className="font-black text-gray-700 mb-4">🎯 社員の月間目標時間</h3>
+            <div className="space-y-3">
+              {wMembers.map(m => (
+                <div key={m.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-2xl">
+                  <span className="font-bold text-gray-700">{m.name}</span>
+                  <div className="flex items-center gap-2">
+                    <input type="number" defaultValue={168} className="w-16 bg-white border-none rounded-lg p-1 text-center font-bold" />
+                    <span className="text-xs text-gray-400">h</span>
+                  </div>
                 </div>
               ))}
-              {slots.filter(s => s.group === group).length === 0 && (
-                <p className="text-center py-4 text-xs text-gray-300 italic">枠が設定されていません</p>
-              )}
             </div>
-          </div>
-        ))}
+          </section>
+        </div>
+
+        {/* 右側：バー設定（スライダー） */}
+        <div className="space-y-2 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+          <h3 className="font-black text-gray-700 mb-4 sticky top-0 bg-gray-50 py-2 z-10">🕒 勤務時間の枠作成 (バー設定)</h3>
+          
+          {/* ポジションごとにループ表示 */}
+          {['hd', 'kd', 'hn', 'kn'].map(pos => {
+            const countKey = `${pos}_${activeTab === 'weekday' ? 'wd' : 'we'}` as keyof typeof counts
+            const count = counts[countKey]
+            return Array.from({ length: count }).map((_, i) => (
+              <SlotSlider 
+                key={`${activeTab}-${pos}-${i}`} 
+                id={`${activeTab}-${pos}-${i}`} 
+                label={`${pos.toUpperCase()} ${i+1}人目`} 
+              />
+            ))
+          })}
+        </div>
       </div>
 
-      <div className="fixed bottom-8 left-0 right-0 flex justify-center px-4 md:pl-72 z-50">
-        <button className="w-full max-w-lg bg-gray-900 text-white py-5 rounded-[2rem] font-black shadow-2xl hover:bg-black active:scale-95 transition-all">
-          🚀 この設定でシフトを生成する
+      {/* 固定アクションボタン */}
+      <div className="fixed bottom-0 left-0 right-0 md:left-64 bg-white/80 backdrop-blur-xl border-t border-gray-100 p-4 flex gap-4 z-30">
+        <button className="flex-1 bg-gray-100 text-gray-600 py-4 rounded-2xl font-black hover:bg-gray-200 transition-all">
+          📁 下書きとして保存
+        </button>
+        <button className="flex-[2] bg-orange-600 text-white py-4 rounded-2xl font-black shadow-xl shadow-orange-200 hover:bg-orange-700 active:scale-95 transition-all">
+          🚀 シフト案を生成する
         </button>
       </div>
     </div>
