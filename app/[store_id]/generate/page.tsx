@@ -4,70 +4,57 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useParams } from 'next/navigation'
 
-// --- 便利な道具：時間を数字に変換 ---
-const tToF = (t: string) => {
-  const [h, m] = t.split(':').map(Number)
-  return h + m / 60
-}
+// --- 時間変換の道具 ---
 const fToT = (f: number) => {
   const h = Math.floor(f)
-  const m = (f % 1) * 60
+  const m = Math.round((f % 1) * 60)
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
-
-// 30分刻みの選択肢
-const TIME_STEPS = Array.from({ length: 49 }, (_, i) => i * 0.5)
 
 export default function GeneratePage() {
   const { store_id } = useParams()
   const [storeInfo, setStoreInfo] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'wd' | 'we'>('wd') // wd: 平日, we: 休日
+  const [activeTab, setActiveTab] = useState<'wd' | 'we'>('wd')
 
-  // --- 人数設定の状態 ---
   const [counts, setCounts] = useState<any>({
     wd_hd: 2, wd_kd: 2, wd_hn: 3, wd_kn: 3,
     we_hd: 3, we_kd: 2, we_hn: 4, we_kn: 4
   })
 
-  // --- 枠時間の設定状態 ---
   const [slots, setSlots] = useState<any>({})
 
-  // 1. データの読み込み
   useEffect(() => {
     const loadSettings = async () => {
       const { data } = await supabase.from('stores').select('*').eq('store_id', store_id).single()
       if (data) {
         setStoreInfo(data)
-        // もし過去の保存データがあれば復元（なければ初期値を生成）
         if (data.last_settings) {
-          setCounts(data.last_settings.counts)
-          setSlots(data.last_settings.slots)
+          setCounts(data.last_settings.counts || counts)
+          setSlots(data.last_settings.slots || {})
         }
       }
     }
     loadSettings()
   }, [store_id])
 
-  // 人数変更ボタン
   const changeCount = (key: string, delta: number) => {
     setCounts((prev: any) => ({ ...prev, [key]: Math.max(0, prev[key] + delta) }))
   }
 
-  // 時間変更（スライダー風）
-  const updateSlot = (key: string, index: number, field: 'start' | 'end', val: number) => {
-    const id = `${key}_${index}`
-    const current = slots[id] || { start: 10.0, end: 18.0 }
-    setSlots((prev: any) => ({
-      ...prev,
-      [id]: { ...current, [field]: val }
-    }))
+  // ★重要：時間の更新（開始が終了を追い越さないように制御）
+  const updateTime = (id: string, type: 'start' | 'end', val: number) => {
+    setSlots((prev: any) => {
+      const current = prev[id] || { start: 10, end: 18 }
+      let { start, end } = current
+      if (type === 'start') start = Math.min(val, end - 0.5) // 終了より前をキープ
+      if (type === 'end') end = Math.max(val, start + 0.5)   // 開始より後をキープ
+      return { ...prev, [id]: { start, end } }
+    })
   }
 
-  // 合計人時（Jinji）の計算
   const calculateJinji = () => {
     let total = 0
-    const prefix = activeTab === 'wd' ? 'wd' : 'we'
-    // 各ポジションの人数分だけ時間を足す
+    const prefix = activeTab
     const positions = ['hd', 'kd', 'hn', 'kn']
     positions.forEach(pos => {
       const count = counts[`${prefix}_${pos}`]
@@ -79,90 +66,114 @@ export default function GeneratePage() {
     return total
   }
 
-  // 保存 ＋ 生成
-  const handleSaveAndGenerate = async () => {
+  const handleSave = async () => {
     const { error } = await supabase.from('stores').update({
       last_settings: { counts, slots }
     }).eq('store_id', store_id)
-
     if (error) alert('保存失敗: ' + error.message)
-    else alert('設定を保存しました！AI生成（FastAPI連携）を開始します。')
+    else alert('設定を保存しました！')
   }
 
   if (!storeInfo) return <div className="p-10 text-gray-400">読み込み中...</div>
 
-  const currentPrefix = activeTab
+  const posLabels: any = { hd: 'ホール昼', kd: 'キッチン昼', hn: 'ホール夜', kn: 'キッチン夜' }
 
   return (
-    <div className="max-w-5xl mx-auto p-4 md:p-8 pb-32">
-      {/* ヘッダー：人時メーター */}
-      <div className="flex justify-between items-center mb-8 bg-white p-6 rounded-3xl shadow-sm border border-orange-100">
+    <div className="max-w-5xl mx-auto p-4 md:p-8 pb-40 text-gray-800">
+      {/* ヘッダー */}
+      <div className="flex justify-between items-center mb-8 bg-white p-6 rounded-[2rem] shadow-sm border border-orange-50">
         <div>
-          <h1 className="text-2xl font-black text-gray-800">🤖 シフト自動生成設定</h1>
-          <p className="text-xs text-gray-400 font-bold tracking-widest">{storeInfo.name}</p>
+          <h1 className="text-2xl font-black flex items-center gap-2">
+            <span className="text-3xl">🤖</span> シフト自動生成設定
+          </h1>
+          <p className="text-xs text-gray-400 font-bold ml-10">{storeInfo.name}</p>
         </div>
         <div className="text-right">
-          <p className="text-[10px] text-gray-400 font-bold uppercase">現在の日別合計人時</p>
-          <div className="text-3xl font-black text-orange-500">
+          <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Daily Total Jinji</p>
+          <div className="text-4xl font-black text-orange-500 tabular-nums">
             {calculateJinji().toFixed(1)}<span className="text-sm ml-1 text-gray-300">H</span>
           </div>
         </div>
       </div>
 
-      {/* タブ切り替え */}
-      <div className="flex bg-gray-200 p-1 rounded-2xl w-full max-w-sm mx-auto mb-8">
-        <button onClick={() => setActiveTab('wd')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'wd' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}>🚃 平日</button>
-        <button onClick={() => setActiveTab('we')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'we' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}>🌞 金土日祝</button>
+      {/* タブ */}
+      <div className="flex bg-gray-100 p-1.5 rounded-2xl w-full max-w-sm mx-auto mb-10 shadow-inner">
+        <button onClick={() => setActiveTab('wd')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'wd' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-400'}`}>🚃 平日</button>
+        <button onClick={() => setActiveTab('we')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'we' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-400'}`}>🌞 金土日祝</button>
       </div>
 
-      {/* 人数設定セクション */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      {/* 人数設定 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
         {['hd', 'kd', 'hn', 'kn'].map(pos => {
-          const key = `${currentPrefix}_${pos}`
-          const label = pos === 'hd' ? 'ホール昼' : pos === 'kd' ? 'キッチン昼' : pos === 'hn' ? 'ホール夜' : 'キッチン夜'
+          const key = `${activeTab}_${pos}`
           return (
-            <div key={pos} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-              <p className="text-[10px] text-gray-400 font-bold mb-2">{label}</p>
-              <div className="flex justify-between items-center">
-                <button onClick={() => changeCount(key, -1)} className="w-8 h-8 rounded-full bg-gray-100">-</button>
-                <span className="text-xl font-black">{counts[key]}</span>
-                <button onClick={() => changeCount(key, 1)} className="w-8 h-8 rounded-full bg-orange-100 text-orange-600">+</button>
+            <div key={pos} className="bg-white p-5 rounded-[1.5rem] border border-gray-100 shadow-sm text-center">
+              <p className="text-[10px] text-gray-400 font-black mb-3 uppercase">{posLabels[pos]}</p>
+              <div className="flex justify-around items-center gap-2">
+                <button onClick={() => changeCount(key, -1)} className="w-8 h-8 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-200 transition-colors">－</button>
+                <span className="text-2xl font-black w-8">{counts[key]}</span>
+                <button onClick={() => changeCount(key, 1)} className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors">＋</button>
               </div>
             </div>
           )
         })}
       </div>
 
-      {/* バー（スライダー）設定セクション */}
-      <div className="space-y-4">
+      {/* バー設定セクション */}
+      <div className="space-y-3">
         {['hd', 'kd', 'hn', 'kn'].map(pos => (
-          Array.from({ length: counts[`${currentPrefix}_${pos}`] }).map((_, i) => {
-            const id = `${currentPrefix}_${pos}_${i}`
-            const slot = slots[id] || { start: 10, end: 18 }
-            const label = `${pos.toUpperCase()}${i + 1}人目`
+          Array.from({ length: counts[`${activeTab}_${pos}`] }).map((_, i) => {
+            const id = `${activeTab}_${pos}_${i}`
+            const { start, end } = slots[id] || { start: 10, end: 18 }
             return (
-              <div key={id} className="bg-white p-6 rounded-3xl shadow-sm border border-gray-50 flex flex-col md:flex-row md:items-center gap-4">
-                <div className="w-24 font-bold text-gray-500 text-xs">{label}</div>
+              <div key={id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex flex-col md:flex-row md:items-center gap-4">
+                <div className="w-24 font-black text-gray-400 text-[10px] uppercase tracking-tighter">{pos.toUpperCase()}{i + 1}人目</div>
+                
                 <div className="flex-1 flex items-center gap-4">
-                  <span className="text-xs font-mono w-10 text-right">{fToT(slot.start)}</span>
-                  {/* Next.js/Reactでのバー操作：2つのスライダー */}
-                  <div className="flex-1 flex gap-2">
-                    <input type="range" min="0" max="24" step="0.5" value={slot.start} onChange={(e) => updateSlot(currentPrefix, i, 'start', parseFloat(e.target.value))} className="flex-1 accent-orange-500" />
-                    <input type="range" min="0" max="24" step="0.5" value={slot.end} onChange={(e) => updateSlot(currentPrefix, i, 'end', parseFloat(e.target.value))} className="flex-1 accent-orange-600" />
+                  <span className="text-[11px] font-bold text-gray-400 w-10 text-right">{fToT(start)}</span>
+                  
+                  {/* ★ 自作デュアルスライダー ★ */}
+                  <div className="relative flex-1 h-6 flex items-center group">
+                    {/* 背景グレーバー */}
+                    <div className="absolute w-full h-1.5 bg-gray-100 rounded-full"></div>
+                    {/* オレンジ色の選択範囲バー */}
+                    <div 
+                      className="absolute h-1.5 bg-orange-500 rounded-full shadow-[0_0_10px_rgba(249,115,22,0.3)]"
+                      style={{ 
+                        left: `${(start / 24) * 100}%`, 
+                        width: `${((end - start) / 24) * 100}%` 
+                      }}
+                    ></div>
+                    {/* つまみ1: 開始 (透明なrange入力を重ねる) */}
+                    <input 
+                      type="range" min="0" max="24" step="0.5" value={start}
+                      onChange={(e) => updateTime(id, 'start', parseFloat(e.target.value))}
+                      className="absolute w-full appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-orange-500 [&::-webkit-slider-thumb]:shadow-md"
+                    />
+                    {/* つまみ2: 終了 */}
+                    <input 
+                      type="range" min="0" max="24" step="0.5" value={end}
+                      onChange={(e) => updateTime(id, 'end', parseFloat(e.target.value))}
+                      className="absolute w-full appearance-none bg-transparent pointer-events-none z-20 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-orange-600 [&::-webkit-slider-thumb]:shadow-md"
+                    />
                   </div>
-                  <span className="text-xs font-mono w-10">{fToT(slot.end)}</span>
+
+                  <span className="text-[11px] font-bold text-gray-400 w-10">{fToT(end)}</span>
                 </div>
-                <div className="text-orange-500 font-black text-xs w-12">{(slot.end - slot.start).toFixed(1)}h</div>
+                
+                <div className="bg-orange-50 px-3 py-1 rounded-full text-orange-600 font-black text-[11px] min-w-[50px] text-center">
+                  {(end - start).toFixed(1)}h
+                </div>
               </div>
             )
           })
         ))}
       </div>
 
-      {/* 巨大な生成ボタン */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/80 backdrop-blur-md md:left-64 border-t border-gray-100">
-        <button onClick={handleSaveAndGenerate} className="max-w-5xl mx-auto w-full bg-gray-900 text-white py-5 rounded-2xl font-black text-lg shadow-xl hover:bg-orange-600 transition-all active:scale-95">
-          🚀 設定を保存してシフトを生成する
+      {/* 固定ボタン */}
+      <div className="fixed bottom-0 left-0 right-0 p-6 bg-white/90 backdrop-blur-md md:left-64 border-t border-gray-100 flex justify-center z-50">
+        <button onClick={handleSave} className="max-w-xl w-full bg-gray-900 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-2xl hover:bg-orange-600 transition-all transform active:scale-95 flex items-center justify-center gap-3">
+          🚀 設定を保存してシフトを生成
         </button>
       </div>
     </div>
