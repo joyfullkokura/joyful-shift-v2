@@ -5,24 +5,51 @@ export default function HomePage() {
   const { store_id } = useParams()
 
   return (
-    <div className="p-6 max-w-md mx-auto">
-      <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-orange-50 text-center">
-        <h1 className="text-3xl font-black text-gray-800 mb-2">🏪 {store_id}店</h1>
-        <p className="text-orange-500 font-bold text-sm mb-8">Joyful Shift V2 へようこそ</p>
-        
-        <div className="space-y-4 text-left">
-          <div className="bg-orange-50 p-4 rounded-2xl">
-            <p className="text-xs text-orange-700 font-bold mb-1">📢 お知らせ</p>
-            <p className="text-sm text-gray-600">10月分の休み希望を受け付けています。下の「📅 休み希望」から入力してください！</p>
+    <div className="mx-auto max-w-4xl p-4 md:p-8">
+      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
+        <div className="border-b border-[var(--border)] bg-[var(--surface-subtle)] p-6 md:p-8">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Store Overview</p>
+              <h1 className="text-3xl font-bold text-[var(--text)] md:text-4xl">{store_id}店</h1>
+            </div>
+            <div className="rounded-md border border-[var(--border)] bg-white px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の進捗</p>
+              <p className="mt-2 text-2xl font-bold text-[var(--text)]">84%</p>
+            </div>
           </div>
-          
-          <div className="p-4 border border-gray-100 rounded-2xl">
-            <p className="text-xs text-gray-400 font-bold mb-2">使い方ガイド</p>
-            <ul className="text-xs text-gray-500 space-y-2">
-              <li>・このページは現在準備中です。</li>
-              <li>・確定したシフトは「📊 シフト閲覧」から確認できます。</li>
+        </div>
+
+        <div className="grid gap-5 p-6 md:grid-cols-[1.4fr_1fr] md:p-8">
+          <section className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-5">
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">お知らせ</p>
+            <p className="text-base font-medium leading-7 text-[var(--text-muted)]">
+              10月分の休み希望を受け付けています。休み希望から入力してください。
+            </p>
+          </section>
+
+          <section className="rounded-md border border-[var(--border)] bg-white p-5">
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の目標</p>
+            <ul className="space-y-3 text-sm text-[var(--text-muted)]">
+              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--text)]" />シフト確定まで進める</li>
+              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--primary)]" />従業員の希望を確認</li>
+              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--text-subtle)]" />月末にレビューを実施</li>
             </ul>
-          </div>
+          </section>
+
+          <section className="rounded-md border border-[var(--border)] bg-white p-5 md:col-span-2">
+            <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">使い方ガイド</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-4">
+                <p className="text-sm font-bold text-[var(--text)]">1. 休み希望を入力</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">日ごとの希望とメモを登録して、従業員の予定を整理します。</p>
+              </div>
+              <div className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-4">
+                <p className="text-sm font-bold text-[var(--text)]">2. シフトを確認</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">生成した内容や予定をシフト閲覧でチェックして、調整します。</p>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
