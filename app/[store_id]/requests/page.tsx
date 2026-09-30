@@ -226,17 +226,16 @@ export default function RequestsPage() {
     titleCell.value = `【${targetYear}年${targetMonth}月】 休み希望・要望 一覧表`
     titleCell.font = { bold: true, size: 18 }
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' }
-    worksheet.mergeCells(1, 1, 1, daysArray.length + 3)
+    worksheet.mergeCells(1, 1, 1, daysArray.length + 2)
 
     const headerRow = worksheet.getRow(3)
-    headerRow.values = ['名前', ...daysArray.map(d => String(d)), '今月のスタンス', '休み希望数']
+    headerRow.values = ['名前', ...daysArray.map(d => String(d)), '休み希望数']
     headerRow.height = 24
     headerRow.font = { bold: true, size: 10 }
     headerRow.alignment = { horizontal: 'center', vertical: 'middle' }
 
     worksheet.getColumn(1).width = 12
-    worksheet.getColumn(daysArray.length + 3).width = 12
-    worksheet.getColumn(daysArray.length + 2).width = 35
+    worksheet.getColumn(daysArray.length + 2).width = 12
     for (let i = 0; i < daysArray.length; i += 1) {
       worksheet.getColumn(i + 2).width = 5.2
     }
@@ -250,7 +249,6 @@ export default function RequestsPage() {
       currentRow.getCell(1).border = excelCellBorder as any
 
       const staffOffCount = allRequests.filter(r => r.staff_id === person.id && r.is_off).length
-      const stanceValue = ruleMap[String(person.id)] || '未設定'
 
       daysArray.forEach((day, dayIdx) => {
         const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -279,14 +277,7 @@ export default function RequestsPage() {
         }
       })
 
-      const stanceCell = currentRow.getCell(daysArray.length + 2)
-      stanceCell.value = stanceValue
-      stanceCell.border = excelCellBorder as any
-      stanceCell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }
-      stanceCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
-      stanceCell.font = { size: 9 }
-
-      const countCell = currentRow.getCell(daysArray.length + 3)
+      const countCell = currentRow.getCell(daysArray.length + 2)
       countCell.value = `${staffOffCount}日`
       countCell.border = excelCellBorder as any
       countCell.alignment = { vertical: 'middle', horizontal: 'center' }
@@ -294,7 +285,6 @@ export default function RequestsPage() {
       countCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }
     })
 
-    const headerDef = headerRow.getCell(1)
     for (let col = 1; col <= headerRow.cellCount; col += 1) {
       const cell = headerRow.getCell(col)
       cell.border = excelCellBorder as any
@@ -316,10 +306,6 @@ export default function RequestsPage() {
         }
       }
       if (col === daysArray.length + 2) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
-        cell.font = { bold: true, color: { argb: 'FF111827' }, size: 10 }
-      }
-      if (col === daysArray.length + 3) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }
         cell.font = { bold: true, color: { argb: 'FF111827' }, size: 10 }
       }
@@ -329,7 +315,7 @@ export default function RequestsPage() {
     worksheet.getCell('A3').font = { bold: true, size: 10 }
     worksheet.getCell('A3').alignment = { horizontal: 'center', vertical: 'middle' }
 
-    const lastColumn = toColumnName(daysArray.length + 3)
+    const lastColumn = toColumnName(daysArray.length + 2)
     worksheet.getCell(`${lastColumn}1`).font = { bold: true }
 
     const buffer = await workbook.xlsx.writeBuffer()
