@@ -412,11 +412,11 @@ export default function RequestsPage() {
           {isEmployee && <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">Excel出力</button>}
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-max min-w-full border-separate border-spacing-0 text-[10px]">
+        <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-max min-w-full table-fixed border-collapse text-[10px]">
             <thead>
               <tr>
-                <th className="sticky left-0 z-20 min-w-[112px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold text-slate-700">スタッフ名</th>
+                <th className="sticky left-0 z-20 w-[112px] min-w-[112px] border border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold text-slate-700">スタッフ名</th>
                 {daysArray.map(day => {
                   const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
                   const dateKind = getDateKind(dateStr, targetYear)
@@ -425,9 +425,9 @@ export default function RequestsPage() {
                     : dateKind === 'saturday'
                       ? 'bg-blue-50/40 text-blue-600'
                       : 'bg-slate-50 text-slate-600'
-                  return <th key={dateStr} title={getHolidayMap(targetYear)[dateStr]} className={`w-9 min-w-9 border-b border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
+                  return <th key={dateStr} title={getHolidayMap(targetYear)[dateStr]} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
                 })}
-                <th className="min-w-[76px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">希望日数</th>
+                <th className="w-[76px] min-w-[76px] border border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">希望日数</th>
               </tr>
             </thead>
             <tbody>
@@ -436,7 +436,7 @@ export default function RequestsPage() {
                 const offCount = allRequests.filter(request => request.staff_id === person.id && request.is_off).length
                 return (
                   <tr key={person.id} className={isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'}>
-                    <th scope="row" className={`sticky left-0 z-10 border-b border-r border-slate-100 px-2 py-2 text-left font-medium ${isCurrentStaff ? 'bg-amber-50' : 'bg-white'} text-slate-800`}>
+                    <th scope="row" className={`sticky left-0 z-10 w-[112px] min-w-[112px] border border-slate-200 px-2 py-2 text-left font-medium ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-800`}>
                       <span className="block max-w-[104px] truncate">{person.name}</span>
                     </th>
                     {daysArray.map(day => {
@@ -451,12 +451,12 @@ export default function RequestsPage() {
                           ? 'bg-blue-50/20'
                           : ''
                       return (
-                        <td key={dateStr} title={(request?.memo || '').trim() || undefined} className={`w-9 min-w-9 border-b border-slate-100 px-1 py-2 text-center ${isOff ? 'bg-red-50 font-semibold text-red-600' : `${dateTint} ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-500`}`}>
+                        <td key={dateStr} title={(request?.memo || '').trim() || undefined} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center ${isOff ? 'bg-red-50 font-semibold text-red-600' : `${dateTint} ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-500`}`}>
                           {isOff ? '×' : hasMemo ? <span className="font-bold text-amber-600" aria-label="メモあり">•</span> : ''}
                         </td>
                       )
                     })}
-                    <td className={`border-b border-slate-100 px-2 py-2 text-right font-medium tabular-nums ${isCurrentStaff ? 'bg-amber-50/50 text-slate-900' : 'bg-slate-50/60 text-slate-700'}`}>{offCount}日</td>
+                    <td className={`border border-slate-200 px-2 py-2 text-right font-medium tabular-nums ${isCurrentStaff ? 'bg-amber-50/50 text-slate-900' : 'bg-slate-50/60 text-slate-700'}`}>{offCount}日</td>
                   </tr>
                 )
               })}

@@ -219,13 +219,11 @@ export default function ViewShiftPage() {
             <p className="text-xs text-slate-500">自分の行はアンバーで表示</p>
           </section>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table className="w-max min-w-full border-separate border-spacing-0 text-[11px]">
               <thead>
                 <tr className="text-slate-600">
-                  <th className="sticky left-0 z-20 min-w-[150px] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-left font-semibold">スタッフ名</th>
-                  <th className="sticky left-[150px] z-20 min-w-[100px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold">メイン職種</th>
-                  <th className="sticky left-[250px] z-20 min-w-[100px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold">雇用区分</th>
+                  <th className="sticky left-0 z-20 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold">スタッフ</th>
                   {dates.map(date => {
                     const day = Number(date.slice(-2))
                     const weekday = new Date(year, month - 1, day).getDay()
@@ -236,22 +234,23 @@ export default function ViewShiftPage() {
                         ? 'bg-blue-50/40 text-blue-600'
                         : 'bg-slate-50'
                     return (
-                      <th key={date} className={`w-[76px] min-w-[76px] border-b border-slate-200 px-1 py-2 text-center font-semibold ${dayClass}`} title={holiday || undefined}>
+                      <th key={date} className={`w-[52px] min-w-[52px] border-b border-slate-200 px-0.5 py-2 text-center font-semibold ${dayClass}`} title={holiday || undefined}>
                         <span className="block">{day}日</span>
-                        <span className="block text-[10px] font-normal">{new Date(year, month - 1, day).toLocaleDateString('ja-JP', { weekday: 'short' })}</span>
+                        <span className="block text-[9px] font-normal">{new Date(year, month - 1, day).toLocaleDateString('ja-JP', { weekday: 'short' })}</span>
                       </th>
                     )
                   })}
-                  <th className="min-w-[86px] border-b border-slate-200 px-2 py-2 text-right font-semibold">出勤日数</th>
-                  <th className="sticky right-0 z-20 min-w-[96px] border-b border-l border-slate-200 bg-slate-50 px-3 py-2 text-right font-semibold">勤務時間</th>
+                  <th className="sticky right-[84px] z-20 w-[76px] min-w-[76px] border-b border-l border-slate-200 bg-slate-50 px-1 py-2 text-right font-semibold">出勤日数</th>
+                  <th className="sticky right-0 z-20 w-[84px] min-w-[84px] border-b border-l border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold">勤務時間</th>
                 </tr>
               </thead>
               <tbody>
                 {schedule.staff.map(person => (
                   <tr key={person.id} className={person.id === highlightedStaffId ? 'bg-amber-50/60 text-slate-800' : 'text-slate-700'}>
-                    <th scope="row" className={`sticky left-0 z-10 border-b border-r border-slate-100 px-3 py-2 text-left font-medium ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.name}</th>
-                    <td className={`sticky left-[150px] z-10 border-b border-r border-slate-100 px-2 py-2 ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.mainJob}</td>
-                    <td className={`sticky left-[250px] z-10 border-b border-r border-slate-100 px-2 py-2 ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.employmentType || (person.isEmployee ? '社員' : 'アルバイト')}</td>
+                    <th scope="row" className={`sticky left-0 z-10 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 px-2 py-1.5 text-left font-medium ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>
+                      <span className="block truncate text-[11px] text-slate-800">{person.name}</span>
+                      <span className="mt-0.5 block truncate text-[9px] leading-tight text-slate-400">{person.mainJob}・{person.employmentType || (person.isEmployee ? '社員' : 'アルバイト')}</span>
+                    </th>
                     {dates.map(date => {
                       const day = Number(date.slice(-2))
                       const weekday = new Date(year, month - 1, day).getDay()
@@ -266,10 +265,10 @@ export default function ViewShiftPage() {
                             : weekday === 6
                               ? 'bg-blue-50/20 text-slate-700'
                               : 'bg-white text-slate-700'
-                      return <td key={date} className={`w-[76px] min-w-[76px] border-b border-slate-100 px-1 py-2 text-center tabular-nums ${cellClass}`}>{shift === '×' ? '×' : shift || '-'}</td>
+                      return <td key={date} className={`w-[52px] min-w-[52px] border-b border-slate-100 px-0.5 py-2 text-center text-[10px] tabular-nums ${cellClass}`}>{shift === '×' ? '×' : shift || '-'}</td>
                     })}
-                    <td className="border-b border-slate-100 px-2 py-2 text-right tabular-nums">{person.assignedDays}日</td>
-                    <td className={`sticky right-0 z-10 border-b border-l border-slate-100 px-3 py-2 text-right font-semibold tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{Number(person.assignedHours || 0).toFixed(1)}h</td>
+                    <td className={`sticky right-[84px] z-10 w-[76px] min-w-[76px] border-b border-l border-slate-100 px-1 py-2 text-right tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.assignedDays}日</td>
+                    <td className={`sticky right-0 z-10 w-[84px] min-w-[84px] border-b border-l border-slate-100 px-2 py-2 text-right font-semibold tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{Number(person.assignedHours || 0).toFixed(1)}h</td>
                   </tr>
                 ))}
               </tbody>
