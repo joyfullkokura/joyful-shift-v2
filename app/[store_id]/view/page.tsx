@@ -77,6 +77,7 @@ export default function ViewShiftPage() {
   const dates = Array.from({ length: daysInMonth }, (_, index) =>
     `${year}-${String(month).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`
   )
+  const firstDayOfWeek = new Date(year, month - 1, 1).getDay()
 
   useEffect(() => {
     let isCurrent = true
@@ -127,6 +128,7 @@ export default function ViewShiftPage() {
   const assignedHours = schedule?.assignedHours
     ?? schedule?.staff.reduce((total, person) => total + (Number(person.assignedHours) || 0), 0)
     ?? 0
+  const currentPerson = schedule?.staff.find(person => person.id === currentStaff?.id)
 
   return (
     <div className="mx-auto max-w-[1600px] p-4 pb-10 md:p-8 print:max-w-none print:p-0">
@@ -163,16 +165,58 @@ export default function ViewShiftPage() {
         </div>
       ) : (
         <>
-          <section className="mb-5 flex flex-wrap items-center gap-x-8 gap-y-3 border-b border-slate-200 pb-5">
+          <section className="mb-6 flex flex-wrap items-center gap-x-8 gap-y-3">
             <div className="flex items-center gap-2 text-sm text-slate-600"><Users size={16} /><span>スタッフ <strong className="font-semibold text-slate-900">{staffCount}名</strong></span></div>
             <div className="flex items-center gap-2 text-sm text-slate-600"><Clock3 size={16} /><span>合計稼働人時 <strong className="font-semibold text-slate-900">{assignedHours.toFixed(1)}h</strong></span></div>
-            <label className="ml-auto flex items-center gap-2 text-sm text-slate-600 print:hidden">
-              <span>自分の名前</span>
-              <select value={highlightedStaffId} onChange={event => setHighlightedStaffId(event.target.value)} className="min-w-[180px] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-slate-500">
-                <option value="">選択してください</option>
-                {schedule.staff.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
-              </select>
-            </label>
+          </section>
+
+          <section className="mb-7 rounded-lg border border-slate-200 bg-white p-4 md:p-6">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase text-slate-500">My schedule</p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">{currentStaff?.name || '個人'}さんのシフト</h2>
+              </div>
+              <div className="flex gap-2">
+                <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">勤務時間 <strong className="ml-1 text-slate-900">{Number(currentPerson?.assignedHours || 0).toFixed(1)}h</strong></span>
+                <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">出勤日数 <strong className="ml-1 text-slate-900">{Number(currentPerson?.assignedDays || 0)}日</strong></span>
+              </div>
+            </div>
+            {currentPerson ? (
+              <div className="grid grid-cols-7 gap-1.5 md:gap-2">
+                {['日', '月', '火', '水', '木', '金', '土'].map((label, index) => (
+                  <div key={label} className={`py-1 text-center text-[10px] font-semibold ${index === 0 ? 'text-red-600' : index === 6 ? 'text-blue-600' : 'text-slate-500'}`}>{label}</div>
+                ))}
+                {Array.from({ length: firstDayOfWeek }, (_, index) => <div key={`empty-${index}`} />)}
+                {dates.map(date => {
+                  const day = Number(date.slice(-2))
+                  const weekday = new Date(year, month - 1, day).getDay()
+                  const holiday = HOLIDAYS[date]
+                  const shift = currentPerson.shifts?.[date] || ''
+                  const isOff = shift === '×' || !shift
+                  const tone = isOff
+                    ? 'border-slate-200 bg-slate-50 text-slate-500'
+                    : 'border-amber-200 bg-amber-50/60 text-slate-800'
+                  return (
+                    <div key={date} className={`flex min-h-[72px] flex-col rounded-md border p-1.5 md:min-h-[92px] md:p-2 ${tone}`}>
+                      <span className={`text-[10px] font-semibold ${weekday === 0 || holiday ? 'text-red-600' : weekday === 6 ? 'text-blue-600' : 'text-slate-600'}`}>{day}日</span>
+                      {isOff
+                        ? <span className="mt-auto text-center text-[10px] text-slate-400">休み</span>
+                        : <span className="mt-auto break-words text-center text-[9px] font-semibold leading-tight md:text-[11px]">{shift}</span>}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="rounded-md bg-slate-50 px-4 py-5 text-center text-sm text-slate-600">この月のシフト表にログイン中のスタッフが見つかりません。</p>
+            )}
+          </section>
+
+          <section className="mb-4 flex flex-wrap items-end justify-between gap-2 border-t border-slate-200 pt-6">
+            <div>
+              <p className="text-[10px] font-semibold uppercase text-slate-500">Store schedule</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">全スタッフのシフト一覧表</h2>
+            </div>
+            <p className="text-xs text-slate-500">自分の行はアンバーで表示</p>
           </section>
 
           <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">

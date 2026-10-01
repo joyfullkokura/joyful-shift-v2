@@ -110,32 +110,24 @@ export default function RequestsPage() {
   useEffect(() => {
     const fetchInitialData = async () => {
       if (!storeId) return
-      if (isEmployee) {
-        const { data: staffData } = await supabase.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name')
-        setStaff((staffData || []).sort((left, right) =>
-          Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || left.name.localeCompare(right.name, 'ja')
-        ))
-      } else {
-        setStaff([])
-      }
+      const { data: staffData } = await supabase.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name')
+      setStaff((staffData || []).sort((left, right) =>
+        Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || left.name.localeCompare(right.name, 'ja')
+      ))
 
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       const endOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${daysInMonth}`
 
-      if (isEmployee) {
-        const { data: reqData } = await supabase
-          .from('shift_requests')
-          .select('*')
-          .eq('store_id', storeId)
-          .gte('date', startOfMonth)
-          .lte('date', endOfMonth)
-        setAllRequests(reqData || [])
-      } else {
-        setAllRequests([])
-      }
+      const { data: reqData } = await supabase
+        .from('shift_requests')
+        .select('*')
+        .eq('store_id', storeId)
+        .gte('date', startOfMonth)
+        .lte('date', endOfMonth)
+      setAllRequests(reqData || [])
     }
     fetchInitialData()
-  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth, isEmployee])
+  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
 
   useEffect(() => {
     const fetchRuleMap = async () => {
@@ -342,8 +334,8 @@ export default function RequestsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-md p-4 pb-20">
-      <div className="rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
+    <div className="mx-auto max-w-[1600px] p-4 pb-20 md:p-8">
+      <div className="mx-auto mb-8 max-w-md rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
         <div className="mb-6 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-[var(--text)]">{targetMonth}月 <span className="font-normal text-[var(--text-subtle)]">希望</span></h1>
@@ -410,6 +402,69 @@ export default function RequestsPage() {
           </button>
         )}
       </div>
+
+      <section className="mt-8 border-t border-slate-200 pt-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">店舗全体の休み希望状況</h2>
+            <p className="mt-1 text-xs text-slate-500">{targetYear}年{targetMonth}月</p>
+          </div>
+          {isEmployee && <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">Excel出力</button>}
+        </div>
+
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-max min-w-full border-separate border-spacing-0 text-[10px]">
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-20 min-w-[112px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold text-slate-700">スタッフ名</th>
+                {daysArray.map(day => {
+                  const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                  const dateKind = getDateKind(dateStr, targetYear)
+                  const headerClass = dateKind === 'holiday' || dateKind === 'sunday'
+                    ? 'bg-red-50/40 text-red-600'
+                    : dateKind === 'saturday'
+                      ? 'bg-blue-50/40 text-blue-600'
+                      : 'bg-slate-50 text-slate-600'
+                  return <th key={dateStr} title={getHolidayMap(targetYear)[dateStr]} className={`w-9 min-w-9 border-b border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
+                })}
+                <th className="min-w-[76px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">希望日数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {staff.map(person => {
+                const isCurrentStaff = person.id === selectedStaff.id
+                const offCount = allRequests.filter(request => request.staff_id === person.id && request.is_off).length
+                return (
+                  <tr key={person.id} className={isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'}>
+                    <th scope="row" className={`sticky left-0 z-10 border-b border-r border-slate-100 px-2 py-2 text-left font-medium ${isCurrentStaff ? 'bg-amber-50' : 'bg-white'} text-slate-800`}>
+                      <span className="block max-w-[104px] truncate">{person.name}</span>
+                    </th>
+                    {daysArray.map(day => {
+                      const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                      const request = allRequests.find(row => row.staff_id === person.id && row.date === dateStr)
+                      const isOff = Boolean(request?.is_off)
+                      const hasMemo = Boolean((request?.memo || '').trim())
+                      const dateKind = getDateKind(dateStr, targetYear)
+                      const dateTint = dateKind === 'holiday' || dateKind === 'sunday'
+                        ? 'bg-red-50/20'
+                        : dateKind === 'saturday'
+                          ? 'bg-blue-50/20'
+                          : ''
+                      return (
+                        <td key={dateStr} title={(request?.memo || '').trim() || undefined} className={`w-9 min-w-9 border-b border-slate-100 px-1 py-2 text-center ${isOff ? 'bg-red-50 font-semibold text-red-600' : `${dateTint} ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-500`}`}>
+                          {isOff ? '×' : hasMemo ? <span className="font-bold text-amber-600" aria-label="メモあり">•</span> : ''}
+                        </td>
+                      )
+                    })}
+                    <td className={`border-b border-slate-100 px-2 py-2 text-right font-medium tabular-nums ${isCurrentStaff ? 'bg-amber-50/50 text-slate-900' : 'bg-slate-50/60 text-slate-700'}`}>{offCount}日</td>
+                  </tr>
+                )
+              })}
+              {staff.length === 0 && <tr><td colSpan={daysArray.length + 2} className="px-4 py-8 text-center text-sm text-slate-500">スタッフ情報がありません。</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   )
 }
