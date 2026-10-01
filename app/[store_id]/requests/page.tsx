@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
+import { useAdmin } from '@/context/AdminContext'
 
 const HOLIDAY_MAP_2026: Record<string, string> = {
   '2026-01-01': '元日',
@@ -83,14 +84,14 @@ const toColumnName = (index: number) => {
 export default function RequestsPage() {
   const params = useParams()
   const storeId = params.store_id as string
+  const { currentStaff, isEmployee } = useAdmin()
   const [staff, setStaff] = useState<any[]>([])
-  const [selectedStaff, setSelectedStaff] = useState<any>(null)
+  const selectedStaff = currentStaff
   const [requests, setRequests] = useState<{[key: string]: {is_off: boolean, memo: string}}>({})
   const [activeDate, setActiveDate] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [allRequests, setAllRequests] = useState<any[]>([])
   const [ruleMap, setRuleMap] = useState<Record<string, string>>({})
-  const [showOverview, setShowOverview] = useState(true)
 
   const now = new Date()
   const [viewDate, setViewDate] = useState(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -109,22 +110,32 @@ export default function RequestsPage() {
   useEffect(() => {
     const fetchInitialData = async () => {
       if (!storeId) return
-      const { data: staffData } = await supabase.from('staff').select('id, name').eq('store_id', storeId).order('name')
-      setStaff(staffData || [])
+      if (isEmployee) {
+        const { data: staffData } = await supabase.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name')
+        setStaff((staffData || []).sort((left, right) =>
+          Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || left.name.localeCompare(right.name, 'ja')
+        ))
+      } else {
+        setStaff([])
+      }
 
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       const endOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${daysInMonth}`
 
-      const { data: reqData } = await supabase
-        .from('shift_requests')
-        .select('*')
-        .eq('store_id', storeId)
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth)
-      setAllRequests(reqData || [])
+      if (isEmployee) {
+        const { data: reqData } = await supabase
+          .from('shift_requests')
+          .select('*')
+          .eq('store_id', storeId)
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+        setAllRequests(reqData || [])
+      } else {
+        setAllRequests([])
+      }
     }
     fetchInitialData()
-  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
+  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth, isEmployee])
 
   useEffect(() => {
     const fetchRuleMap = async () => {
@@ -191,7 +202,7 @@ export default function RequestsPage() {
   }
 
   const handleSave = async () => {
-    if (isReadOnly) return
+    if (isReadOnly || !selectedStaff) return
     setIsSaving(true)
     try {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
@@ -324,123 +335,10 @@ export default function RequestsPage() {
 
   const changeMonth = (diff: number) => {
     setViewDate(new Date(targetYear, targetMonth - 1 + diff, 1))
-    setSelectedStaff(null)
   }
 
   if (!selectedStaff) {
-    return (
-      <div className="mx-auto w-full max-w-md min-h-screen px-2 py-4">
-        <div className="mb-8 flex flex-col items-center gap-4">
-          <div className="text-center">
-            <p className="mb-1 text-lg font-bold text-[var(--text-muted)]">{targetYear}年</p>
-            <h1 className="text-3xl font-bold leading-tight text-[var(--text)]">
-              {targetMonth}月 <span className="text-[var(--primary)]">休み希望入力</span>
-            </h1>
-          </div>
-
-          <div className="flex w-full items-center justify-between gap-3 px-2">
-            <button onClick={() => changeMonth(-1)} className="flex-1 rounded-md border border-[var(--border)] bg-white px-3 py-3 text-xs font-bold text-[var(--text-muted)]">
-              ← {targetMonth === 1 ? 12 : targetMonth - 1}月閲覧
-            </button>
-            <button onClick={() => changeMonth(1)} className="flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] px-3 py-3 text-xs font-bold text-[var(--primary-strong)]">
-              {targetMonth === 12 ? 1 : targetMonth + 1}月へ →
-            </button>
-          </div>
-        </div>
-
-        {isReadOnly ? (
-          <div className="mx-2 mb-8 rounded-md border border-slate-200 bg-slate-50 p-8 text-center">
-            <p className="font-bold text-slate-700">閲覧のみ可能です</p>
-            <p className="mt-2 text-xs text-slate-500">以前の月は編集できません</p>
-          </div>
-        ) : (
-          <div className="mb-12 grid gap-3 px-2">
-            {staff.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setSelectedStaff(p)}
-                className="flex w-full items-center justify-between rounded-md border border-[var(--border)] bg-white p-5 text-left text-xl font-bold text-[var(--text)] transition-colors hover:border-slate-300 hover:bg-slate-50"
-              >
-                {p.name}
-                <span className="text-slate-400">→</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="border-t border-[var(--border)] px-2 pt-8">
-          <div className="grid gap-3">
-            <button onClick={() => setShowOverview(!showOverview)} className="w-full rounded-md bg-slate-800 px-4 py-4 text-sm font-bold text-white">
-              {showOverview ? '全体状況を隠す' : '全体の状況を確認'}
-            </button>
-            <button onClick={exportToExcel} className="w-full rounded-md bg-[var(--primary)] px-4 py-4 text-sm font-bold text-white">
-              {targetMonth}月分をExcel出力
-            </button>
-          </div>
-        </div>
-
-        {showOverview && (
-          <div className="mt-8 overflow-x-auto rounded-md border border-[var(--border)] bg-white p-2">
-            <table className="w-full border-collapse text-[8px]">
-              <thead>
-                <tr>
-                  <th className="sticky left-0 z-10 min-w-[42px] border border-[var(--border)] bg-slate-50 p-1 font-bold text-slate-700">名前</th>
-                  {daysArray.map(day => {
-                    const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                    const dateKind = getDateKind(dateStr, targetYear)
-                    const headerClass = dateKind === 'holiday' || dateKind === 'sunday'
-                      ? 'border border-red-200 bg-red-50 text-red-700'
-                      : dateKind === 'saturday'
-                        ? 'border border-blue-200 bg-blue-50 text-blue-700'
-                        : 'border border-slate-200 bg-slate-50 text-slate-600'
-                    return (
-                      <th key={day} className={`min-w-[18px] p-1 text-center font-bold ${headerClass}`}>{day}</th>
-                    )
-                  })}
-                  <th className="min-w-[42px] border border-slate-200 bg-slate-50 p-1 font-bold text-slate-700">休み希望数</th>
-                </tr>
-              </thead>
-              <tbody>
-                {staff.map(p => {
-                  const offCount = allRequests.filter(r => r.staff_id === p.id && r.is_off).length
-                  return (
-                    <tr key={p.id}>
-                      <td className="sticky left-0 z-10 border border-[var(--border)] bg-slate-50 p-1 font-bold text-slate-700">{p.name}</td>
-                      {daysArray.map(day => {
-                        const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                        const req = allRequests.find(r => r.staff_id === p.id && r.date === dateStr)
-                        const dateKind = getDateKind(dateStr, targetYear)
-                        const isOff = Boolean(req?.is_off)
-                        const hasMemo = Boolean((req?.memo || '').trim())
-
-                        const baseCell = 'border border-slate-200 bg-white text-slate-500'
-                        const offCell = 'border border-red-200 bg-red-100 text-red-600 font-bold'
-
-                        return (
-                          <td key={day} className={`min-w-[18px] p-1 text-center align-middle ${isOff ? offCell : baseCell}`}>
-                            {isOff ? (
-                              <span className="inline-flex h-4 w-4 items-center justify-center text-[9px] font-bold leading-none">✖</span>
-                            ) : hasMemo ? (
-                              <div className="flex flex-col items-center justify-center leading-none">
-                                <span className="text-[7px] font-bold text-amber-600">●</span>
-                                <span className="mt-0.5 max-w-[12px] break-words text-[5.5px] font-medium text-amber-700">{(req.memo || '').slice(0, 7)}</span>
-                              </div>
-                            ) : ''}
-                          </td>
-                        )
-                      })}
-                      <td className="border border-slate-200 bg-slate-50 p-1 text-center font-bold text-slate-700">
-                        {offCount}日
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    )
+    return <div className="p-8 text-center text-sm text-slate-500">ログイン情報を読み込んでいます...</div>
   }
 
   return (
@@ -451,7 +349,11 @@ export default function RequestsPage() {
             <h1 className="text-2xl font-bold text-[var(--text)]">{targetMonth}月 <span className="font-normal text-[var(--text-subtle)]">希望</span></h1>
             <p className="text-xs font-bold text-[var(--primary-strong)]">{selectedStaff.name} さん</p>
           </div>
-          <button onClick={() => setSelectedStaff(null)} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">戻る</button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => changeMonth(-1)} aria-label="前月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">←</button>
+            <button type="button" onClick={() => changeMonth(1)} aria-label="翌月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">→</button>
+            {isEmployee && <button onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">Excel</button>}
+          </div>
         </div>
 
         {isReadOnly && <p className="mb-4 text-center text-xs font-bold text-red-700">※過去の月のため編集できません</p>}

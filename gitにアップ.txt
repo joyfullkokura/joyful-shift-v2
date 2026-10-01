@@ -6,3 +6,14 @@ git commit -m "カレンダー機能の実装"
 
 # 3. GitHubへ送信！
 git push origin main
+
+
+
+npm run dev
+
+小倉店のシフト生成設定画面:
+http://localhost:3000/KOKURA/generate
+小倉店の従業員名簿画面:
+http://localhost:3000/KOKURA/staff
+小倉店の休み希望入力画面:
+http://localhost:3000/KOKURA/requests
