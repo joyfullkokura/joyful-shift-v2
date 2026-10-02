@@ -219,7 +219,7 @@ export default function ViewShiftPage() {
             <p className="text-xs text-slate-500">自分の行はアンバーで表示</p>
           </section>
 
-          <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <div className="[touch-action:pan-y] overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white" style={{ touchAction: 'pan-y' }}>
             <table className="w-max min-w-full border-separate border-spacing-0 text-[11px]">
               <thead>
                 <tr className="text-slate-600">

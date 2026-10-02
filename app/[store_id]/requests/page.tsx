@@ -84,7 +84,7 @@ const toColumnName = (index: number) => {
 export default function RequestsPage() {
   const params = useParams()
   const storeId = params.store_id as string
-  const { currentStaff, isEmployee } = useAdmin()
+  const { currentStaff } = useAdmin()
   const [staff, setStaff] = useState<any[]>([])
   const selectedStaff = currentStaff
   const [requests, setRequests] = useState<{[key: string]: {is_off: boolean, memo: string}}>({})
@@ -344,7 +344,6 @@ export default function RequestsPage() {
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => changeMonth(-1)} aria-label="前月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">←</button>
             <button type="button" onClick={() => changeMonth(1)} aria-label="翌月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">→</button>
-            {isEmployee && <button onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">Excel</button>}
           </div>
         </div>
 
@@ -412,7 +411,7 @@ export default function RequestsPage() {
           <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">休み希望をExcel出力</button>
         </div>
 
-        <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <div className="[touch-action:pan-y] overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white" style={{ touchAction: 'pan-y' }}>
           <table className="w-max min-w-full table-fixed border-collapse text-[10px]">
             <thead>
               <tr>

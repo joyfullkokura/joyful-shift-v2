@@ -898,7 +898,7 @@ export default function GeneratePage() {
       `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`
     )
     return (
-      <div className="mx-auto max-w-[1440px] p-4 pb-40 md:p-8 md:pb-10">
+      <div className="mx-auto max-w-[1440px] p-4 pb-60 md:p-8 md:pb-10">
         <header className="sticky top-0 z-30 mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white/95 py-4 backdrop-blur-sm">
           <div>
             <p className="text-[10px] font-semibold uppercase text-slate-500">Draft schedule</p>
@@ -963,7 +963,7 @@ export default function GeneratePage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-4 pb-40 md:p-8 md:pb-10">
+    <div className="mx-auto max-w-6xl p-4 pb-60 md:p-8 md:pb-10">
       <div className="mb-8 flex items-center justify-between rounded-md border border-[var(--border)] bg-white p-5 shadow-sm">
         <button onClick={() => changeMonth(-1)} className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100"><ChevronLeft size={18} /></button>
         <div className="text-center">
@@ -1141,9 +1141,6 @@ export default function GeneratePage() {
                 合計割り当て人時: {generatedSchedule.assignedHours.toFixed(1)}h
               </span>
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={handleGenerate} disabled={isGenerating} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60">
-                  <Rocket size={16} /> {isGenerating ? '再生成中...' : '条件を変えて再生成'}
-                </button>
                 <button
                   type="button"
                   onClick={handleConfirmSchedule}
@@ -1236,7 +1233,7 @@ export default function GeneratePage() {
         )}
       </div>
 
-      <div className="fixed bottom-16 left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white/95 p-4 pb-3 shadow-sm md:bottom-0 md:left-[268px] md:justify-center md:pb-4">
+      <div className="fixed bottom-28 left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white/95 p-4 pb-3 shadow-sm md:bottom-0 md:left-[268px] md:justify-center md:pb-4">
         <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-md bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200 md:max-w-[150px]">
           <span className="inline-flex items-center gap-2"><Save size={16} /> {isSaving ? '...' : '保存'}</span>
         </button>
