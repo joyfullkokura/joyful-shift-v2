@@ -240,8 +240,8 @@ export default function ViewShiftPage() {
                       </th>
                     )
                   })}
-                  <th className="sticky right-[84px] z-20 w-[76px] min-w-[76px] border-b border-l border-slate-200 bg-slate-50 px-1 py-2 text-right font-semibold">出勤日数</th>
-                  <th className="sticky right-0 z-20 w-[84px] min-w-[84px] border-b border-l border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold">勤務時間</th>
+                  <th className="w-[76px] min-w-[76px] border-b border-l border-slate-200 bg-slate-50 px-1 py-2 text-right font-semibold">出勤日数</th>
+                  <th className="w-[84px] min-w-[84px] border-b border-l border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold">勤務時間</th>
                 </tr>
               </thead>
               <tbody>
@@ -267,8 +267,8 @@ export default function ViewShiftPage() {
                               : 'bg-white text-slate-700'
                       return <td key={date} className={`w-[52px] min-w-[52px] border-b border-slate-100 px-0.5 py-2 text-center text-[10px] tabular-nums ${cellClass}`}>{shift === '×' ? '×' : shift || '-'}</td>
                     })}
-                    <td className={`sticky right-[84px] z-10 w-[76px] min-w-[76px] border-b border-l border-slate-100 px-1 py-2 text-right tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.assignedDays}日</td>
-                    <td className={`sticky right-0 z-10 w-[84px] min-w-[84px] border-b border-l border-slate-100 px-2 py-2 text-right font-semibold tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{Number(person.assignedHours || 0).toFixed(1)}h</td>
+                    <td className={`w-[76px] min-w-[76px] border-b border-l border-slate-100 px-1 py-2 text-right tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.assignedDays}日</td>
+                    <td className={`w-[84px] min-w-[84px] border-b border-l border-slate-100 px-2 py-2 text-right font-semibold tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{Number(person.assignedHours || 0).toFixed(1)}h</td>
                   </tr>
                 ))}
               </tbody>

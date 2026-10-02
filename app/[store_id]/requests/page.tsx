@@ -409,7 +409,7 @@ export default function RequestsPage() {
             <h2 className="text-base font-semibold text-slate-900">店舗全体の休み希望状況</h2>
             <p className="mt-1 text-xs text-slate-500">{targetYear}年{targetMonth}月</p>
           </div>
-          {isEmployee && <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">Excel出力</button>}
+          <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">休み希望をExcel出力</button>
         </div>
 
         <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">

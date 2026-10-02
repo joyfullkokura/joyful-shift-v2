@@ -898,13 +898,13 @@ export default function GeneratePage() {
       `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`
     )
     return (
-      <div className="mx-auto max-w-[1440px] p-4 pb-10 md:p-8">
+      <div className="mx-auto max-w-[1440px] p-4 pb-40 md:p-8 md:pb-10">
         <header className="sticky top-0 z-30 mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white/95 py-4 backdrop-blur-sm">
           <div>
             <p className="text-[10px] font-semibold uppercase text-slate-500">Draft schedule</p>
             <h1 className="mt-1 text-xl font-semibold text-slate-900">{targetYear}年{targetMonth}月 シフト編集</h1>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
             <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
               <Save size={16} /> {draftAction === 'save' ? '保存中...' : 'いったん保存'}
             </button>
@@ -926,15 +926,14 @@ export default function GeneratePage() {
           <span>欠員 {generatedSchedule.vacancyCount}枠</span>
         </div>
 
-        <div className="overflow-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-max min-w-full border-separate border-spacing-0 text-[11px]">
+        <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-max min-w-full table-fixed border-separate border-spacing-0 text-[11px]">
             <thead>
               <tr className="bg-slate-50 text-slate-600">
-                <th className="sticky left-0 z-20 min-w-[150px] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-left font-semibold">スタッフ名</th>
-                <th className="min-w-[100px] border-b border-slate-200 px-3 py-2 text-left font-semibold">職種</th>
+                <th className="sticky left-0 z-20 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold">スタッフ</th>
                 {editDates.map(date => {
                   const day = Number(date.slice(-2))
-                  return <th key={date} className="w-[88px] min-w-[88px] border-b border-slate-200 px-1 py-2 text-center font-semibold">{day}日<span className="block text-[10px] font-normal">{weekdayLabel(date)}</span></th>
+                  return <th key={date} className="w-[68px] min-w-[68px] border-b border-slate-200 px-1 py-2 text-center font-semibold">{day}日<span className="block text-[10px] font-normal">{weekdayLabel(date)}</span></th>
                 })}
                 <th className="min-w-[86px] border-b border-slate-200 px-3 py-2 text-right font-semibold">出勤日数</th>
                 <th className="sticky right-0 z-20 min-w-[96px] border-b border-l border-slate-200 bg-slate-50 px-3 py-2 text-right font-semibold">勤務時間</th>
@@ -943,11 +942,13 @@ export default function GeneratePage() {
             <tbody>
               {generatedSchedule.staff.map(staff => (
                 <tr key={staff.id} className="text-slate-700">
-                  <th scope="row" className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2 text-left font-medium">{staff.name}</th>
-                  <td className="border-b border-slate-100 px-3 py-2">{staff.mainJob}</td>
+                  <th scope="row" className="sticky left-0 z-10 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 bg-white px-2 py-1.5 text-left font-medium">
+                    <span className="block truncate text-[11px] text-slate-800">{staff.name}</span>
+                    <span className="mt-0.5 block truncate text-[9px] text-slate-400">{staff.mainJob}</span>
+                  </th>
                   {editDates.map(date => (
-                    <td key={date} className="border-b border-slate-100 px-1 py-1">
-                      <input aria-label={`${staff.name} ${date} 勤務時間`} value={staff.shifts[date] || ''} onChange={event => updateDraftShift(staff.id, date, event.target.value)} placeholder="-" className="w-full rounded-md border border-transparent bg-transparent px-1 py-1.5 text-center text-[10px] text-slate-700 outline-none hover:border-slate-200 focus:border-slate-400 focus:bg-white" />
+                    <td key={date} className="w-[68px] min-w-[68px] border-b border-slate-100 px-1 py-1">
+                      <input aria-label={`${staff.name} ${date} 勤務時間`} value={staff.shifts[date] || ''} onChange={event => updateDraftShift(staff.id, date, event.target.value)} placeholder="-" autoComplete="off" inputMode="text" className="min-h-11 w-[60px] min-w-[60px] touch-manipulation rounded-md border border-transparent bg-transparent px-1 py-2 text-center text-[10px] text-slate-700 outline-none hover:border-slate-200 focus:border-slate-400 focus:bg-white focus:ring-1 focus:ring-slate-300" />
                     </td>
                   ))}
                   <td className="border-b border-slate-100 px-3 py-2 text-right tabular-nums">{staff.assignedDays}日</td>
@@ -962,7 +963,7 @@ export default function GeneratePage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-4 md:p-8">
+    <div className="mx-auto max-w-6xl p-4 pb-40 md:p-8 md:pb-10">
       <div className="mb-8 flex items-center justify-between rounded-md border border-[var(--border)] bg-white p-5 shadow-sm">
         <button onClick={() => changeMonth(-1)} className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100"><ChevronLeft size={18} /></button>
         <div className="text-center">
@@ -1084,7 +1085,7 @@ export default function GeneratePage() {
         </div>
       </div>
 
-      <div className="space-y-12 pb-40">
+      <div className="space-y-12 pb-8">
 
         {groups.map((group: string, gIdx: number) => {
           const color = ROLE_COLORS[gIdx % ROLE_COLORS.length]
@@ -1139,16 +1140,21 @@ export default function GeneratePage() {
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">
                 合計割り当て人時: {generatedSchedule.assignedHours.toFixed(1)}h
               </span>
-              <button
-                type="button"
-                onClick={handleConfirmSchedule}
-                disabled={isConfirming}
-                className="flex items-center gap-2 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60"
-              >
-                <CheckCircle2 size={16} />
-                {isConfirming ? '保存中...' : 'この案をベースに確定して微調整へ'}
-                <ArrowRight size={16} />
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={handleGenerate} disabled={isGenerating} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60">
+                  <Rocket size={16} /> {isGenerating ? '再生成中...' : '条件を変えて再生成'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSchedule}
+                  disabled={isConfirming}
+                  className="flex items-center gap-2 rounded-md bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <CheckCircle2 size={16} />
+                  {isConfirming ? '保存中...' : 'この案をベースに確定して微調整へ'}
+                  <ArrowRight size={16} />
+                </button>
+              </div>
             </div>
             {confirmError && <p role="alert" className="text-sm font-medium text-red-700">{confirmError}</p>}
             <div className="overflow-x-auto rounded-md border border-[var(--border)] bg-white">
@@ -1230,7 +1236,7 @@ export default function GeneratePage() {
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white/95 p-4 pb-12 shadow-sm md:left-[268px] md:justify-center">
+      <div className="fixed bottom-16 left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white/95 p-4 pb-3 shadow-sm md:bottom-0 md:left-[268px] md:justify-center md:pb-4">
         <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-md bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200 md:max-w-[150px]">
           <span className="inline-flex items-center gap-2"><Save size={16} /> {isSaving ? '...' : '保存'}</span>
         </button>
