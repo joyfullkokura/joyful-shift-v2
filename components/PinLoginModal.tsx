@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, KeyRound, LockKeyhole, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { CurrentStaff } from '@/context/AdminContext'
@@ -16,12 +16,12 @@ type PinLoginModalProps = {
   onSuccess: (staff: CurrentStaff) => void
 }
 
-const PIN_LENGTH = 4
+const MIN_PIN_LENGTH = 4
+const MAX_PIN_LENGTH = 8
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
 
 async function hashPin(pin: string): Promise<string> {
-  const encodedPin = new TextEncoder().encode(pin)
-  const digest = await crypto.subtle.digest('SHA-256', encodedPin)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
@@ -33,38 +33,27 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [error, setError] = useState('')
   const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
-  const resetPin = () => {
+  const resetPin = useCallback(() => {
     setPin('')
     setConfirmPin('')
-    setStage('pin')
+    setStage(requestedMode === 'change' ? 'current' : 'pin')
     setError('')
     setIsProcessing(false)
-  }
+  }, [requestedMode])
 
-  const handlePinComplete = async (nextPin: string) => {
-    if (isProcessing || nextPin.length !== PIN_LENGTH) return
+  const submitCurrent = useCallback(async () => {
+    const value = stage === 'confirm' ? confirmPin : pin
+    if (isProcessing || value.length < MIN_PIN_LENGTH || value.length > MAX_PIN_LENGTH) {
+      setError(`${MIN_PIN_LENGTH}〜${MAX_PIN_LENGTH}桁の暗証番号を入力してください。`)
+      return
+    }
     setIsProcessing(true)
     setError('')
 
     try {
-      const pinHash = await hashPin(nextPin)
-      if (mode === 'setup' && stage === 'pin') {
-        setPin(nextPin)
-        setStage('confirm')
-        setIsProcessing(false)
-        return
-      }
-
-      if (mode === 'change' && stage === 'current') {
-        if (pinHash !== staff.pin_hash) {
+      if (stage === 'current') {
+        const currentHash = await hashPin(value)
+        if (currentHash !== staff.pin_hash) {
           setError('現在の暗証番号が一致しませんでした。もう一度入力してください。')
           resetPin()
           return
@@ -75,74 +64,88 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         return
       }
 
-      if (mode === 'change' && stage === 'new') {
-        setPin(nextPin)
+      if (stage === 'new' || stage === 'pin') {
+        if (mode === 'login') {
+          const pinHash = await hashPin(value)
+          if (pinHash !== staff.pin_hash) {
+            setError('暗証番号が一致しませんでした。もう一度入力してください。')
+            resetPin()
+            return
+          }
+          onSuccess(staff)
+          return
+        }
+        setConfirmPin('')
         setStage('confirm')
         setIsProcessing(false)
         return
       }
 
-      if (mode === 'setup' && stage === 'confirm') {
-        if (nextPin !== pin) {
+      if (stage === 'confirm') {
+        if (confirmPin !== pin) {
           setError('暗証番号が一致しませんでした。もう一度入力してください。')
           resetPin()
           return
         }
+        const pinHash = await hashPin(pin)
         const { error: updateError } = await supabase.from('staff').update({ pin_hash: pinHash }).eq('id', staff.id).eq('store_id', storeId)
         if (updateError) throw updateError
         onSuccess({ ...staff, pin_hash: pinHash })
-        return
       }
-
-      if (mode === 'change' && stage === 'confirm') {
-        if (nextPin !== pin) {
-          setError('新しい暗証番号が一致しませんでした。もう一度入力してください。')
-          resetPin()
-          return
-        }
-        const { error: updateError } = await supabase.from('staff').update({ pin_hash: pinHash }).eq('id', staff.id).eq('store_id', storeId)
-        if (updateError) throw updateError
-        onSuccess({ ...staff, pin_hash: pinHash })
-        return
-      }
-
-      if (pinHash !== staff.pin_hash) {
-        setError('PINが一致しませんでした。4桁をもう一度入力してください。')
-        resetPin()
-        return
-      }
-      onSuccess(staff)
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '認証に失敗しました。')
       resetPin()
     }
-  }
+  }, [confirmPin, isProcessing, mode, onSuccess, pin, resetPin, staff, stage, storeId])
 
-  const handleDigit = (digit: string) => {
-    if (isProcessing || stage === 'confirm' || (stage === 'pin' && pin.length >= PIN_LENGTH)) return
-    const nextPin = `${pin}${digit}`
-    setPin(nextPin)
-    if (nextPin.length === PIN_LENGTH) void handlePinComplete(nextPin)
-  }
-
-  const handleDelete = () => {
-    if (isProcessing || stage === 'confirm') return
-    setPin(current => current.slice(0, -1))
-    setError('')
-  }
-
-  const handleConfirmDigit = (digit: string) => {
-    if (isProcessing || confirmPin.length >= PIN_LENGTH) return
-    const nextPin = `${confirmPin}${digit}`
-    setConfirmPin(nextPin)
-    if (nextPin.length === PIN_LENGTH) void handlePinComplete(nextPin)
-  }
-
-  const handleConfirmDelete = () => {
+  const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
-    setConfirmPin(current => current.slice(0, -1))
+    if (stage === 'confirm') {
+      if (confirmPin.length < MAX_PIN_LENGTH) setConfirmPin(current => `${current}${digit}`)
+    } else if (pin.length < MAX_PIN_LENGTH) {
+      setPin(current => `${current}${digit}`)
+    }
     setError('')
-  }
+  }, [confirmPin.length, isProcessing, pin.length, stage])
+
+  const deleteDigit = useCallback(() => {
+    if (isProcessing) return
+    if (stage === 'confirm') setConfirmPin(current => current.slice(0, -1))
+    else setPin(current => current.slice(0, -1))
+    setError('')
+  }, [isProcessing, stage])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      } else if (event.key === 'Backspace' || event.key === 'Delete') {
+        event.preventDefault()
+        deleteDigit()
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        void submitCurrent()
+      } else if (/^[0-9]$/.test(event.key)) {
+        event.preventDefault()
+        addDigit(event.key)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [addDigit, deleteDigit, onClose, submitCurrent])
+
+  const activePin = stage === 'confirm' ? confirmPin : pin
+  const displayLabel = stage === 'confirm' ? '再入力状態' : stage === 'current' ? '現在の暗証番号' : stage === 'new' ? '新しい暗証番号' : '暗証番号'
+  const statusLabel = mode === 'login'
+    ? '4〜8桁を入力してEnterを押してください。'
+    : stage === 'current'
+      ? '現在の暗証番号を入力してEnterを押してください。'
+      : stage === 'confirm'
+        ? '設定した暗証番号をもう一度入力してください。'
+        : stage === 'new'
+          ? '新しい暗証番号を入力してEnterを押してください。'
+          : '4〜8桁を入力してEnterを押してください。'
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -161,47 +164,31 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         <div className="p-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 text-center">
             <p className="text-sm font-semibold text-slate-900">{staff.name}さん</p>
-            <p className="mt-1 text-xs text-slate-500">{mode === 'setup' ? '初回設定です。4桁の暗証番号を設定してください。' : mode === 'change' ? '現在の暗証番号を確認してから新しい暗証番号を設定してください。' : '登録済みの暗証番号を入力してください。'}</p>
+            <p className="mt-1 text-xs text-slate-500">{mode === 'setup' ? '初回設定です。4〜8桁の暗証番号を設定してください。' : mode === 'change' ? '現在の暗証番号を確認してから新しい暗証番号を設定してください。' : '登録済みの暗証番号を入力してください。'}</p>
           </div>
 
-          <div className="mt-5 flex items-center justify-center gap-3" aria-label="入力状態">
-            {Array.from({ length: PIN_LENGTH }, (_, index) => {
-              const value = stage === 'pin' || stage === 'current' || stage === 'new' ? pin[index] : confirmPin[index]
+          <div className="mt-5 flex items-center justify-center gap-3" aria-label={displayLabel}>
+            {Array.from({ length: MAX_PIN_LENGTH }, (_, index) => {
+              const value = activePin[index]
               return <span key={index} className={`flex h-11 w-11 items-center justify-center rounded-full border text-xl font-semibold ${value ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-300'}`}>{value ? '●' : '○'}</span>
             })}
           </div>
-
-          <div className="mt-3 min-h-6 text-center text-xs font-medium text-slate-600">
-            {mode === 'setup' && stage === 'pin' && '1番目の暗証番号を入力してください。'}
-            {mode === 'setup' && stage === 'confirm' && '同じ暗証番号をもう一度入力してください。'}
-            {mode === 'change' && stage === 'current' && '現在の暗証番号を入力してください。'}
-            {mode === 'change' && stage === 'new' && '新しい暗証番号を入力してください。'}
-            {mode === 'change' && stage === 'confirm' && '新しい暗証番号をもう一度入力してください。'}
-            {mode === 'login' && '4桁を入力すると自動で認証されます。'}
-          </div>
-
+          <p className="mt-3 min-h-5 text-center text-xs font-medium text-slate-600">{statusLabel}</p>
           {error && <p role="alert" className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
 
           <div className="mt-4 grid grid-cols-3 gap-2">
             {DIGITS.map(digit => (
-              <button
-                key={digit}
-                type="button"
-                onClick={() => stage === 'confirm' ? handleConfirmDigit(digit) : handleDigit(digit)}
-                disabled={isProcessing || (stage === 'confirm' ? confirmPin.length >= PIN_LENGTH : pin.length >= PIN_LENGTH)}
-                className="h-14 rounded-md border border-slate-200 bg-white text-lg font-semibold text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {digit}
-              </button>
+              <button key={digit} type="button" onClick={() => addDigit(digit)} disabled={isProcessing || (stage === 'confirm' ? confirmPin.length >= MAX_PIN_LENGTH : pin.length >= MAX_PIN_LENGTH)} className="h-14 rounded-md border border-slate-200 bg-white text-lg font-semibold text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{digit}</button>
             ))}
-            <button type="button" onClick={stage === 'confirm' ? handleConfirmDelete : handleDelete} disabled={isProcessing || (stage === 'confirm' ? confirmPin.length === 0 : pin.length === 0)} className="h-14 rounded-md border border-rose-200 bg-rose-50 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50">
-              <span className="inline-flex items-center gap-1"><LockKeyhole size={15} />削除</span>
-            </button>
+            <button type="button" onClick={deleteDigit} disabled={isProcessing || activePin.length === 0} className="h-14 rounded-md border border-rose-200 bg-rose-50 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"><span className="inline-flex items-center gap-1"><LockKeyhole size={15} />削除</span></button>
           </div>
 
-          <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">
-            {isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}
+          <div className="mt-5 flex justify-center gap-2">
+            <button type="button" onClick={onClose} className="rounded-md border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">キャンセル</button>
+            <button type="button" onClick={() => void submitCurrent()} disabled={isProcessing || activePin.length < MIN_PIN_LENGTH} className="rounded-md bg-slate-900 px-5 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{stage === 'confirm' ? '確認' : '次へ進む'}</button>
           </div>
+          <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">※暗証番号を忘れた場合は、社員にリセットを依頼してください</p>
+          <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}</div>
         </div>
       </section>
     </div>

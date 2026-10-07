@@ -1,74 +1,334 @@
 'use client'
-import { useState } from 'react'
-import { KeyRound } from 'lucide-react'
+
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  Edit3,
+  KeyRound,
+  Store,
+} from 'lucide-react'
 import PinLoginModal from '@/components/PinLoginModal'
 import { useAdmin } from '@/context/AdminContext'
+import { supabase } from '@/lib/supabase'
+
+type SchedulePerson = {
+  id: string
+  name: string
+  mainJob?: string
+  isEmployee?: boolean
+  assignedHours?: number
+  shifts?: Record<string, string>
+}
+
+type ScheduleData = {
+  staff: SchedulePerson[]
+  vacancyCount?: number
+  assignedHours?: number
+  alerts?: Array<{ id: string; type: string; message: string }>
+}
+
+type StoreRecord = {
+  name?: string | null
+  notice?: string | null
+}
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const startOfLocalDay = (date: Date) => new Date(
+  date.getFullYear(),
+  date.getMonth(),
+  date.getDate(),
+)
+
+const getCalendarDayDifference = (from: Date, to: Date) => {
+  const fromUtc = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())
+  const toUtc = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate())
+  return Math.round((toUtc - fromUtc) / 86_400_000)
+}
+
+const getRelativeDayLabel = (date: Date, today: Date) => {
+  const difference = getCalendarDayDifference(today, date)
+  if (difference === 0) return '今日'
+  if (difference === 1) return '明日'
+  if (difference === -1) return '昨日'
+  return difference > 0 ? String(difference) + '日後' : String(Math.abs(difference)) + '日前'
+}
+
+const isScheduleData = (value: unknown): value is ScheduleData => {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<ScheduleData>
+  return Array.isArray(candidate.staff) && candidate.staff.every(person =>
+    typeof person.id === 'string' && typeof person.name === 'string'
+  )
+}
+
+const shiftLabel = (value: unknown) => {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+const getShiftPosition = (shift: string) => {
+  const match = shift.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/)
+  if (!match) return null
+  const toHour = (hours: number, minutes: number) => hours + minutes / 60
+  const start = toHour(Number(match[1]), Number(match[2]))
+  const end = toHour(Number(match[3]), Number(match[4]))
+  if (end < start) return null
+  const startPosition = Math.max(0, Math.min(1, (start - 9) / 15))
+  const endPosition = Math.max(startPosition, Math.min(1, (end - 9) / 15))
+  return { startPosition, endPosition }
+}
 
 export default function HomePage() {
   const { store_id } = useParams<{ store_id: string }>()
-  const { currentStaff, login } = useAdmin()
+  const { currentStaff, login, isAdmin } = useAdmin()
   const [isChangingPin, setIsChangingPin] = useState(false)
+  const [isEditingNotice, setIsEditingNotice] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [draftNotice, setDraftNotice] = useState('')
+  const [storeName, setStoreName] = useState('')
+  const [schedule, setSchedule] = useState<ScheduleData | null>(null)
+  const [selectedDate, setSelectedDate] = useState(() => startOfLocalDay(new Date()))
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSavingNotice, setIsSavingNotice] = useState(false)
+  const [error, setError] = useState('')
+
+  const storeId = Array.isArray(store_id) ? store_id[0] : store_id
+  const selectedDateKey = toDateKey(selectedDate)
+  const targetMonth = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-01`
+  const today = startOfLocalDay(new Date())
+  const todayKey = toDateKey(today)
+
+  useEffect(() => {
+    let isCurrent = true
+    const loadDashboard = async () => {
+      setIsLoading(true)
+      setError('')
+      try {
+        const [storeResult, shiftResult] = await Promise.all([
+          supabase.from('stores').select('name, notice').eq('store_id', storeId).maybeSingle(),
+          supabase
+            .from('monthly_shifts')
+            .select('schedule_data')
+            .eq('store_id', storeId)
+            .eq('target_month', targetMonth)
+            .eq('status', 'confirmed')
+            .order('created_at', { ascending: false })
+            .limit(1),
+        ])
+        if (storeResult.error) throw storeResult.error
+        if (shiftResult.error) throw shiftResult.error
+        const store = storeResult.data as StoreRecord | null
+        const latestShift = shiftResult.data?.[0] as { schedule_data?: unknown } | undefined
+        const parsedSchedule = latestShift?.schedule_data
+        if (!isCurrent) return
+        setStoreName(store?.name || storeId)
+        setNotice(store?.notice || '現在の店内お知らせはありません。')
+        setDraftNotice(store?.notice || '')
+        setSchedule(isScheduleData(parsedSchedule) ? parsedSchedule : null)
+      } catch (caughtError) {
+        if (isCurrent) setError(caughtError instanceof Error ? caughtError.message : 'ダッシュボードを読み込めませんでした。')
+      } finally {
+        if (isCurrent) setIsLoading(false)
+      }
+    }
+    void loadDashboard()
+    return () => { isCurrent = false }
+  }, [storeId, targetMonth])
+
+  const schedulePeople = useMemo(() => schedule?.staff || [], [schedule])
+  const todayPerson = schedulePeople.find(person => person.id === currentStaff?.id)
+  const selectedShift = todayPerson?.shifts?.[selectedDateKey] || ''
+  const isSelectedDateToday = selectedDateKey === todayKey
+  const relativeDayLabel = getRelativeDayLabel(selectedDate, today)
+  const scheduledPeople = useMemo(() => schedulePeople
+    .map(person => {
+      const shift = shiftLabel(person.shifts?.[selectedDateKey])
+      return { person, shift, position: getShiftPosition(shift) }
+    })
+    .filter(({ position }) => position !== null), [schedulePeople, selectedDateKey])
+
+  const changeSelectedDate = (offset: number) => {
+    setSelectedDate(current => {
+      const nextDate = startOfLocalDay(current)
+      nextDate.setDate(nextDate.getDate() + offset)
+      return nextDate
+    })
+  }
+
+  const saveNotice = async () => {
+    if (!isAdmin) return
+    setIsSavingNotice(true)
+    try {
+      const { error: updateError } = await supabase
+        .from('stores')
+        .update({ notice: draftNotice.trim() })
+        .eq('store_id', storeId)
+      if (updateError) throw updateError
+      setNotice(draftNotice.trim() || '現在の店舗からのお知らせはありません。')
+      setIsEditingNotice(false)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'お知らせを保存できませんでした。')
+    } finally {
+      setIsSavingNotice(false)
+    }
+  }
+
+  if (isLoading) {
+    return <div className="flex min-h-[60vh] items-center justify-center text-sm text-slate-500">ダッシュボードを読み込み中です…</div>
+  }
 
   return (
-    <div className="mx-auto max-w-4xl p-4 md:p-8">
-      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
-        <div className="border-b border-[var(--border)] bg-[var(--surface-subtle)] p-6 md:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <div className="mx-auto max-w-[1800px] p-4 pb-28 md:p-8 md:pb-10">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-5">
+        <div>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Store dashboard</p>
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white"><Store size={19} /></span>
             <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Store Overview</p>
-              <h1 className="text-3xl font-bold text-[var(--text)] md:text-4xl">{store_id}店</h1>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="rounded-md border border-[var(--border)] bg-white px-4 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の進捗</p>
-                <p className="mt-2 text-2xl font-bold text-[var(--text)]">84%</p>
-              </div>
-              {currentStaff?.pin_hash && (
-                <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-white px-4 py-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-subtle)]">
-                  <KeyRound size={15} />暗証番号を変更
-                </button>
-              )}
+              <h1 className="text-2xl font-bold text-slate-900">{storeName || storeId}</h1>
+              <p className="mt-0.5 text-sm text-slate-500">{currentStaff?.name || 'スタッフ'} · {isAdmin ? '管理者' : '従業員'}</p>
             </div>
           </div>
         </div>
-
-        <div className="grid gap-5 p-6 md:grid-cols-[1.4fr_1fr] md:p-8">
-          <section className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-5">
-            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">お知らせ</p>
-            <p className="text-base font-medium leading-7 text-[var(--text-muted)]">
-              10月分の休み希望を受け付けています。休み希望から入力してください。
-            </p>
-          </section>
-
-          <section className="rounded-md border border-[var(--border)] bg-white p-5">
-            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の目標</p>
-            <ul className="space-y-3 text-sm text-[var(--text-muted)]">
-              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--text)]" />シフト確定まで進める</li>
-              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--primary)]" />従業員の希望を確認</li>
-              <li className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[var(--text-subtle)]" />月末にレビューを実施</li>
-            </ul>
-          </section>
-
-          <section className="rounded-md border border-[var(--border)] bg-white p-5 md:col-span-2">
-            <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">使い方ガイド</p>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-4">
-                <p className="text-sm font-bold text-[var(--text)]">1. 休み希望を入力</p>
-                <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">日ごとの希望とメモを登録して、従業員の予定を整理します。</p>
-              </div>
-              <div className="rounded-md border border-[var(--border)] bg-[var(--surface-subtle)] p-4">
-                <p className="text-sm font-bold text-[var(--text)]">2. シフトを確認</p>
-                <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">生成した内容や予定をシフト閲覧でチェックして、調整します。</p>
-              </div>
-            </div>
-          </section>
+        <div className="flex items-center gap-2">
+          {currentStaff?.pin_hash && (
+            <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+              <KeyRound size={14} />暗証番号を変更
+            </button>
+          )}
         </div>
-      </div>
+      </header>
+
+      {error && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
+
+      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Store notice</p>
+            <h2 className="mt-1 text-sm font-bold text-slate-900">📢 店舗からのお知らせ</h2>
+          </div>
+          {isAdmin && <button type="button" onClick={() => setIsEditingNotice(true)} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"><Edit3 size={12} />✎ 編集</button>}
+        </div>
+        {isEditingNotice ? (
+          <div className="p-4">
+            <textarea value={draftNotice} onChange={event => setDraftNotice(event.target.value)} className="min-h-28 w-full rounded-md border border-slate-300 bg-white p-3 text-sm outline-none focus:border-slate-500" rows={5} />
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => { setDraftNotice(notice === '現在の店舗からのお知らせはありません。' ? '' : notice); setIsEditingNotice(false) }} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">キャンセル</button>
+              <button type="button" disabled={isSavingNotice} onClick={saveNotice} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{isSavingNotice ? '保存中…' : '保存'}</button>
+            </div>
+          </div>
+        ) : <div className="whitespace-pre-wrap p-5 text-sm leading-6 text-slate-600">{notice}</div>}
+      </section>
+
+      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 p-4 md:p-5">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">自分のシフト</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">{selectedShift || '勤務なし'}</h2>
+            <p className="mt-1 text-sm text-slate-500">{currentStaff?.name || 'スタッフ'}の{selectedDate.getMonth() + 1}月{selectedDate.getDate()}日の予定</p>
+          </div>
+          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+            <Clock3 size={15} />
+            {new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        </div>
+        <div className="grid gap-4 p-4 md:grid-cols-[1fr_auto] md:p-5">
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold text-slate-500">当日シフト</p>
+            <p className="mt-2 text-lg font-bold text-slate-900">{selectedShift || 'シフト未登録'}</p>
+          </div>
+          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+            <CalendarDays size={15} />
+            <span className={isSelectedDateToday ? 'font-semibold text-emerald-700' : 'font-semibold text-sky-700'}>{relativeDayLabel}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-4 py-4 md:px-5">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Daily time table</p>
+            <h2 className="mt-1 text-lg font-bold text-slate-900">当日のタイムテーブル</h2>
+          </div>
+          <div className="flex items-center rounded-md border border-slate-200 bg-white">
+            <button type="button" onClick={() => changeSelectedDate(-1)} aria-label="前日" className="p-3 text-slate-600 transition hover:bg-slate-50"><ChevronLeft size={18} /></button>
+            <p className="min-w-52 border-x border-slate-200 px-4 py-2 text-center text-sm font-bold text-slate-900">{selectedDate.getFullYear()}年{selectedDate.getMonth() + 1}月{selectedDate.getDate()}日（{['日', '月', '火', '水', '木', '金', '土'][selectedDate.getDay()]}）</p>
+            <button type="button" onClick={() => changeSelectedDate(1)} aria-label="翌日" className="p-3 text-slate-600 transition hover:bg-slate-50"><ChevronRight size={18} /></button>
+            <button type="button" onClick={() => setSelectedDate(startOfLocalDay(new Date()))} className="mr-2 rounded border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">今日</button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <div className="relative min-w-[980px]">
+            <div className="grid grid-cols-[170px_repeat(15,minmax(52px,1fr))] border-b border-slate-200 bg-slate-50">
+              <div className="border-r border-slate-200 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500">Staff</div>
+              {Array.from({ length: 15 }, (_, index) => {
+                const hour = index + 9
+                return <div key={hour} className="border-r border-slate-100 px-1 py-3 text-center text-[10px] font-semibold text-slate-500">{String(hour).padStart(2, '0')}:00</div>
+              })}
+            </div>
+
+            {scheduledPeople.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-slate-500">本日の出勤予定者はいません</div>
+            ) : scheduledPeople.map(({ person, shift, position }) => {
+              const currentNowPosition = (() => {
+                if (!isSelectedDateToday) return null
+                const now = new Date()
+                const currentHour = now.getHours() + now.getMinutes() / 60
+                if (currentHour < 9 || currentHour > 24) return null
+                return Math.max(0, Math.min(1, (currentHour - 9) / 15))
+              })()
+              return (
+                <div key={person.id} className="grid min-h-16 grid-cols-[170px_minmax(0,1fr)] border-b border-slate-100 last:border-0">
+                  <div className="flex items-center gap-2 border-r border-slate-200 px-4 py-3">
+                    <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold ${person.id === currentStaff?.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{person.name.slice(0, 2)}</span>
+                    <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-800">{person.name}</p><p className="truncate text-[10px] text-slate-500">{person.mainJob || '職種未登録'}</p></div>
+                  </div>
+                  <div className="relative grid min-w-0" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr))' }}>
+                    {Array.from({ length: 15 }, (_, index) => <div key={index} className="border-r border-slate-100" />)}
+                    {position && (
+                      <div
+                        className="absolute top-1/2 z-10 flex h-8 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md bg-slate-900 px-2 text-[10px] font-bold text-white shadow-sm"
+                        style={{
+                          left: `${position.startPosition * 100}%`,
+                          width: `${(position.endPosition - position.startPosition) * 100}%`,
+                        }}
+                      >
+                        {shift}
+                      </div>
+                    )}
+                    {currentNowPosition !== null && currentNowPosition !== undefined && (
+                      <div className="pointer-events-none absolute inset-y-0 z-20 w-px bg-rose-500" style={{ left: `${currentNowPosition * 100}%` }}>
+                        <span className="absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Now</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-500">
+          <span className="h-2 w-2 rounded-full bg-slate-900" />勤務時間
+          <span className="ml-3 h-2 w-2 rounded-full bg-rose-500" />現在時刻
+        </div>
+      </section>
+
       {isChangingPin && currentStaff && (
         <PinLoginModal
           staff={currentStaff}
-          storeId={store_id}
+          storeId={storeId}
           mode="change"
           onClose={() => setIsChangingPin(false)}
           onSuccess={updatedStaff => {
