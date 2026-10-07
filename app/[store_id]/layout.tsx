@@ -5,6 +5,7 @@ import { useParams, usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect, ReactNode } from 'react'
 import { ArrowRight, CalendarDays, Eye, House, LogOut, Sparkles, Store, Users, ClipboardList } from 'lucide-react'
 import { AdminProvider, CurrentStaff, useAdmin } from '@/context/AdminContext'
+import PinLoginModal from '@/components/PinLoginModal'
 import { supabase } from '@/lib/supabase'
 
 function StoreLayoutContent({ children }: { children: ReactNode }) {
@@ -15,6 +16,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
   const { currentStaff, isHydrated, isEmployee, login, logout } = useAdmin()
   const [storeName, setStoreName] = useState('')
   const [members, setMembers] = useState<CurrentStaff[]>([])
+  const [selectedStaff, setSelectedStaff] = useState<CurrentStaff | null>(null)
   const [isLoadingMembers, setIsLoadingMembers] = useState(true)
   const [loadError, setLoadError] = useState('')
 
@@ -24,7 +26,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
       if (!storeId) return
       const [storeResult, staffResult] = await Promise.all([
         supabase.from('stores').select('name').eq('store_id', storeId).maybeSingle(),
-        supabase.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name'),
+        supabase.from('staff').select('id, name, is_employee, pin_hash').eq('store_id', storeId).order('name'),
       ])
       if (!isCurrent) return
       if (storeResult.data?.name) setStoreName(storeResult.data.name)
@@ -34,6 +36,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           id: String(staff.id),
           name: String(staff.name),
           is_employee: Boolean(staff.is_employee),
+          pin_hash: typeof staff.pin_hash === 'string' ? staff.pin_hash : null,
         })).sort((left, right) =>
           Number(right.is_employee) - Number(left.is_employee) || left.name.localeCompare(right.name, 'ja')
         ))
@@ -80,11 +83,22 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           ) : (
             <div className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-3">
               {members.map(member => (
-                <button key={member.id} type="button" onClick={() => login(member)} className="flex min-h-14 items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-3 text-left text-sm font-medium text-slate-800 transition-colors hover:border-slate-400 hover:bg-slate-50">
+                <button key={member.id} type="button" onClick={() => setSelectedStaff(member)} className="flex min-h-14 items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-3 text-left text-sm font-medium text-slate-800 transition-colors hover:border-slate-400 hover:bg-slate-50">
                   <span className="truncate">{member.name}</span><ArrowRight size={15} className="shrink-0 text-slate-400" />
                 </button>
               ))}
             </div>
+          )}
+          {selectedStaff && (
+            <PinLoginModal
+              staff={selectedStaff}
+              storeId={storeId}
+              onClose={() => setSelectedStaff(null)}
+              onSuccess={authenticatedStaff => {
+                login(authenticatedStaff)
+                setSelectedStaff(null)
+              }}
+            />
           )}
         </section>
       </main>

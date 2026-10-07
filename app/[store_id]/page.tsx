@@ -1,8 +1,14 @@
 'use client'
+import { useState } from 'react'
+import { KeyRound } from 'lucide-react'
 import { useParams } from 'next/navigation'
+import PinLoginModal from '@/components/PinLoginModal'
+import { useAdmin } from '@/context/AdminContext'
 
 export default function HomePage() {
-  const { store_id } = useParams()
+  const { store_id } = useParams<{ store_id: string }>()
+  const { currentStaff, login } = useAdmin()
+  const [isChangingPin, setIsChangingPin] = useState(false)
 
   return (
     <div className="mx-auto max-w-4xl p-4 md:p-8">
@@ -13,9 +19,16 @@ export default function HomePage() {
               <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Store Overview</p>
               <h1 className="text-3xl font-bold text-[var(--text)] md:text-4xl">{store_id}店</h1>
             </div>
-            <div className="rounded-md border border-[var(--border)] bg-white px-4 py-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の進捗</p>
-              <p className="mt-2 text-2xl font-bold text-[var(--text)]">84%</p>
+            <div className="flex items-center gap-3">
+              <div className="rounded-md border border-[var(--border)] bg-white px-4 py-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">今月の進捗</p>
+                <p className="mt-2 text-2xl font-bold text-[var(--text)]">84%</p>
+              </div>
+              {currentStaff?.pin_hash && (
+                <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-white px-4 py-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-subtle)]">
+                  <KeyRound size={15} />暗証番号を変更
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -52,6 +65,18 @@ export default function HomePage() {
           </section>
         </div>
       </div>
+      {isChangingPin && currentStaff && (
+        <PinLoginModal
+          staff={currentStaff}
+          storeId={store_id}
+          mode="change"
+          onClose={() => setIsChangingPin(false)}
+          onSuccess={updatedStaff => {
+            login(updatedStaff)
+            setIsChangingPin(false)
+          }}
+        />
+      )}
     </div>
   )
 }

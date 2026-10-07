@@ -5,6 +5,12 @@ export type CurrentStaff = {
   id: string
   name: string
   is_employee: boolean
+  pin_hash?: string | null
+  expiresAt?: string
+}
+
+type StoredStaff = CurrentStaff & {
+  expiresAt: string
 }
 
 interface AdminContextType {
@@ -16,7 +22,19 @@ interface AdminContextType {
   logout: () => void
 }
 
+const SESSION_DURATION_MS = 12 * 60 * 60 * 1000
+const STORAGE_KEY_PREFIX = 'joyful_current_staff_'
 const AdminContext = createContext<AdminContextType | undefined>(undefined)
+
+const isStoredStaff = (value: unknown): value is StoredStaff => {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<StoredStaff>
+  return typeof candidate.id === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.is_employee === 'boolean' &&
+    typeof candidate.expiresAt === 'string' &&
+    !Number.isNaN(Date.parse(candidate.expiresAt))
+}
 
 export function AdminProvider({ children, storeId }: { children: ReactNode; storeId: string }) {
   const [currentStaff, setCurrentStaff] = useState<CurrentStaff | null>(null)
@@ -24,17 +42,20 @@ export function AdminProvider({ children, storeId }: { children: ReactNode; stor
 
   useEffect(() => {
     let restoredStaff: CurrentStaff | null = null
+    const storageKey = `${STORAGE_KEY_PREFIX}${storeId}`
     try {
-      const savedValue = localStorage.getItem(`joyful_current_staff_${storeId}`)
+      const savedValue = localStorage.getItem(storageKey)
       if (savedValue) {
-        const parsed = JSON.parse(savedValue) as Partial<CurrentStaff>
-        if (typeof parsed.id === 'string' && typeof parsed.name === 'string' && typeof parsed.is_employee === 'boolean') {
-          restoredStaff = { id: parsed.id, name: parsed.name, is_employee: parsed.is_employee }
+        const parsed: unknown = JSON.parse(savedValue)
+        if (isStoredStaff(parsed) && new Date(parsed.expiresAt).getTime() > Date.now()) {
+          restoredStaff = parsed
+        } else {
+          localStorage.removeItem(storageKey)
         }
       }
     } catch {
       try {
-        localStorage.removeItem(`joyful_current_staff_${storeId}`)
+        localStorage.removeItem(storageKey)
       } catch {
         restoredStaff = null
       }
@@ -46,9 +67,13 @@ export function AdminProvider({ children, storeId }: { children: ReactNode; stor
   }, [storeId])
 
   const login = useCallback((staff: CurrentStaff) => {
-    setCurrentStaff(staff)
+    const authenticatedStaff: StoredStaff = {
+      ...staff,
+      expiresAt: new Date(Date.now() + SESSION_DURATION_MS).toISOString(),
+    }
+    setCurrentStaff(authenticatedStaff)
     try {
-      localStorage.setItem(`joyful_current_staff_${storeId}`, JSON.stringify(staff))
+      localStorage.setItem(`${STORAGE_KEY_PREFIX}${storeId}`, JSON.stringify(authenticatedStaff))
     } catch {
       // Keep the in-memory session available when browser storage is blocked.
     }
@@ -57,7 +82,7 @@ export function AdminProvider({ children, storeId }: { children: ReactNode; stor
   const logout = useCallback(() => {
     setCurrentStaff(null)
     try {
-      localStorage.removeItem(`joyful_current_staff_${storeId}`)
+      localStorage.removeItem(`${STORAGE_KEY_PREFIX}${storeId}`)
     } catch {
       // Clearing in-memory state is sufficient for the current page session.
     }
@@ -74,11 +99,7 @@ export function AdminProvider({ children, storeId }: { children: ReactNode; stor
     logout,
   }), [currentStaff, isHydrated, isEmployee, login, logout])
 
-  return (
-    <AdminContext.Provider value={value}>
-      {children}
-    </AdminContext.Provider>
-  )
+  return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>
 }
 
 export function useAdmin() {
