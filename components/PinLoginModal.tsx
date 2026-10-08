@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase'
 import type { CurrentStaff } from '@/context/AdminContext'
 
 type PinLoginMode = 'setup' | 'login' | 'change'
-type PinStage = 'pin' | 'confirm' | 'current' | 'new'
+type PinStage = 'pin' | 'confirm' | 'current' | 'new' | 'profile'
 
 type PinLoginModalProps = {
   staff: CurrentStaff
@@ -32,6 +32,10 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
+  const [targetWorkDays, setTargetWorkDays] = useState('3')
+  const [employmentType, setEmploymentType] = useState(staff.is_employee ? '社員' : 'アルバイト')
+  const [mainJob, setMainJob] = useState('ホール')
+  const [memo, setMemo] = useState('')
   const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
 
   const resetPin = useCallback(() => {
@@ -92,6 +96,11 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           resetPin()
           return
         }
+        if (mode === 'setup') {
+          setStage('profile')
+          setIsProcessing(false)
+          return
+        }
         const pinHash = await hashPin(pin)
         const { error: updateError } = await supabase.from('staff').update({ pin_hash: pinHash }).eq('id', staff.id).eq('store_id', storeId)
         if (updateError) throw updateError
@@ -102,6 +111,31 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       resetPin()
     }
   }, [confirmPin, isProcessing, mode, onSuccess, pin, resetPin, staff, stage, storeId])
+
+  const completeInitialSetup = useCallback(async () => {
+    if (isProcessing) return
+    setIsProcessing(true)
+    setError('')
+    try {
+      const pinHash = await hashPin(pin)
+      const { error: updateError } = await supabase
+        .from('staff')
+        .update({
+          pin_hash: pinHash,
+          weekly_target_days: Number(targetWorkDays),
+          main_job: mainJob,
+          is_employee: employmentType === '社員',
+          memo: memo.trim(),
+        })
+        .eq('id', staff.id)
+        .eq('store_id', storeId)
+      if (updateError) throw updateError
+      onSuccess({ ...staff, pin_hash: pinHash, is_employee: employmentType === '社員' })
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
+      setIsProcessing(false)
+    }
+  }, [employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff, storeId, targetWorkDays])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -167,19 +201,22 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         event.preventDefault()
         onClose()
       } else if (event.key === 'Backspace' || event.key === 'Delete') {
+        if (stage === 'profile') return
         event.preventDefault()
         deleteDigit()
       } else if (event.key === 'Enter') {
         event.preventDefault()
-        void submitCurrent()
+        if (stage === 'profile') void completeInitialSetup()
+        else void submitCurrent()
       } else if (/^[0-9]$/.test(event.key)) {
+        if (stage === 'profile') return
         event.preventDefault()
         addDigit(event.key)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [addDigit, deleteDigit, onClose, submitCurrent])
+  }, [addDigit, completeInitialSetup, deleteDigit, onClose, stage, submitCurrent])
 
   const activePin = stage === 'confirm' ? confirmPin : pin
   const displayLabel = stage === 'confirm' ? '再入力状態' : stage === 'current' ? '現在の暗証番号' : stage === 'new' ? '新しい暗証番号' : '暗証番号'
@@ -193,6 +230,8 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           ? '新しい暗証番号を入力してEnterを押してください。'
           : '4〜8桁を入力してEnterを押してください。'
 
+  const isProfileStep = stage === 'profile'
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
       <section role="dialog" aria-modal="true" aria-labelledby="pin-login-title" className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-2xl">
@@ -200,15 +239,51 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white"><KeyRound size={18} /></div>
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Staff authentication</p>
-              <h2 id="pin-login-title" className="mt-0.5 text-lg font-semibold text-slate-900">{mode === 'setup' ? '暗証番号を設定' : mode === 'change' ? '暗証番号を変更' : '暗証番号を入力'}</h2>
+              <h2 id="pin-login-title" className="text-lg font-semibold text-slate-900">{isProfileStep ? '基本勤務条件の登録' : mode === 'setup' ? '暗証番号を設定' : mode === 'change' ? '暗証番号を変更' : '暗証番号を入力'}</h2>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900" aria-label="閉じる"><X size={18} /></button>
         </div>
 
         <div className="p-5">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 text-center">
+          {isProfileStep ? (
+            <div>
+              <p className="text-sm text-slate-600">シフト作成の基準となる希望条件を教えてください（後から変更可能）</p>
+              <div className="mt-5 space-y-4">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">週の希望勤務日数</span>
+                  <select value={targetWorkDays} onChange={event => setTargetWorkDays(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
+                    {[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">雇用区分</span>
+                  <select value={employmentType} onChange={event => setEmploymentType(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
+                    <option value="アルバイト">アルバイト</option>
+                    <option value="パート">パート</option>
+                    <option value="社員">社員</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">メイン職種</span>
+                  <select value={mainJob} onChange={event => setMainJob(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
+                    <option value="ホール">ホール</option>
+                    <option value="キッチン">キッチン</option>
+                    <option value="共通">共通</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">勤務に関する補足メモ</span>
+                  <textarea value={memo} onChange={event => setMemo(event.target.value)} rows={3} placeholder="平日は18時以降のみ、日曜ランチ希望など" className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-slate-500" />
+                </label>
+              </div>
+              {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
+              <div className="mt-5 flex justify-end">
+                <button type="button" onClick={() => void completeInitialSetup()} disabled={isProcessing} className="rounded-md bg-slate-800 px-4 py-2.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を完了してはじめる</button>
+              </div>
+            </div>
+          ) : <>
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-4 text-center">
             <p className="text-sm font-semibold text-slate-900">{staff.name}さん</p>
             <p className="mt-1 text-xs text-slate-500">{mode === 'setup' ? '初回設定です。4〜8桁の暗証番号を設定してください。' : mode === 'change' ? '現在の暗証番号を確認してから新しい暗証番号を設定してください。' : '登録済みの暗証番号を入力してください。'}</p>
           </div>
@@ -216,7 +291,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           <div className="mt-5 flex items-center justify-center gap-3" aria-label={displayLabel}>
             {Array.from({ length: MAX_PIN_LENGTH }, (_, index) => {
               const value = activePin[index]
-              return <span key={index} className={`flex h-11 w-11 items-center justify-center rounded-full border text-xl font-semibold ${value ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-300'}`}>{value ? '●' : '○'}</span>
+              return <span key={index} className={`h-3 w-3 rounded-full border ${value ? 'border-slate-900 bg-slate-900' : 'border-slate-300 bg-white'}`} />
             })}
           </div>
           <p className="mt-3 min-h-5 text-center text-xs font-medium text-slate-600">{statusLabel}</p>
@@ -240,6 +315,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
             </button>
           )}
           <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}</div>
+          </>}
         </div>
       </section>
     </div>

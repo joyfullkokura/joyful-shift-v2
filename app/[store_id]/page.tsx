@@ -9,9 +9,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
+  FileCheck2,
   KeyRound,
   Megaphone,
   Store,
+  UserRoundPen,
 } from 'lucide-react'
 import PinLoginModal from '@/components/PinLoginModal'
 import { useAdmin } from '@/context/AdminContext'
@@ -46,6 +48,51 @@ type PinResetRequest = {
 type ShiftRequest = {
   is_off?: boolean | null
 }
+
+type StaffProfile = {
+  id: string
+  name: string
+  weekly_target_days?: number | null
+  main_job?: string | null
+  memo?: string | null
+  skills?: string | null
+  work_start_1?: string | null
+  work_end_1?: string | null
+  is_employee?: boolean | null
+}
+
+type AvailableHours = {
+  start: string
+  end: string
+}
+
+type ConditionChangeDetails = {
+  weekly_target_days: number
+  main_job: string
+  memo: string
+  skills?: string[]
+  available_hours?: AvailableHours | null
+}
+
+type NewStaffRegistrationDetails = {
+  name: string
+  employment_type: string
+  main_job: string
+  weekly_target_days: number
+}
+
+type StaffRequestRecord = {
+  id: string
+  staff_id: string
+  type: string
+  details: unknown
+  status: 'pending' | 'approved' | 'rejected'
+  is_read_by_staff: boolean | null
+  created_at: string
+  resolved_at?: string | null
+}
+
+const STANDARD_SKILL_OPTIONS = ['[H]レジ', '[H]デザート', '[K]グリル', '[K]サラダ', '[K]ディッシャー', '[K]仕込み']
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear()
@@ -99,6 +146,37 @@ const getShiftPosition = (shift: string) => {
   return { startPosition, endPosition }
 }
 
+const getConditionChangeDetails = (value: unknown): ConditionChangeDetails | null => {
+  if (!value || typeof value !== 'object') return null
+  const details = value as Partial<ConditionChangeDetails>
+  if (!(typeof details.weekly_target_days === 'number' &&
+    typeof details.main_job === 'string' &&
+    typeof details.memo === 'string')) return null
+  const skills = Array.isArray(details.skills) && details.skills.every(skill => typeof skill === 'string')
+    ? details.skills
+    : undefined
+  const hours = details.available_hours
+  const availableHours = hours === null
+    ? null
+    : hours && typeof hours === 'object' &&
+    typeof (hours as Partial<AvailableHours>).start === 'string' &&
+    typeof (hours as Partial<AvailableHours>).end === 'string'
+    ? hours as AvailableHours
+    : undefined
+  return { ...details, skills, available_hours: availableHours } as ConditionChangeDetails
+}
+
+const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistrationDetails | null => {
+  if (!value || typeof value !== 'object') return null
+  const details = value as Partial<NewStaffRegistrationDetails>
+  return typeof details.name === 'string' &&
+    typeof details.employment_type === 'string' &&
+    typeof details.main_job === 'string' &&
+    typeof details.weekly_target_days === 'number'
+    ? details as NewStaffRegistrationDetails
+    : null
+}
+
 export default function HomePage() {
   const { store_id } = useParams<{ store_id: string }>()
   const { currentStaff, login, isAdmin } = useAdmin()
@@ -116,6 +194,19 @@ export default function HomePage() {
   const [successMessage, setSuccessMessage] = useState('')
   const [hasRequestedDayOff, setHasRequestedDayOff] = useState(false)
   const [error, setError] = useState('')
+  const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([])
+  const [conditionRequests, setConditionRequests] = useState<StaffRequestRecord[]>([])
+  const [newStaffRequests, setNewStaffRequests] = useState<StaffRequestRecord[]>([])
+  const [isConditionModalOpen, setIsConditionModalOpen] = useState(false)
+  const [requestedWorkDays, setRequestedWorkDays] = useState('3')
+  const [requestedMainJob, setRequestedMainJob] = useState('ホール')
+  const [requestedSkills, setRequestedSkills] = useState<string[]>([])
+  const [requestedAvailableStart, setRequestedAvailableStart] = useState('')
+  const [requestedAvailableEnd, setRequestedAvailableEnd] = useState('')
+  const [requestedMemo, setRequestedMemo] = useState('')
+  const [isSubmittingConditionRequest, setIsSubmittingConditionRequest] = useState(false)
+  const [isResolvingConditionRequest, setIsResolvingConditionRequest] = useState<string | null>(null)
+  const [isResolvingNewStaffRequest, setIsResolvingNewStaffRequest] = useState<string | null>(null)
 
   const storeId = Array.isArray(store_id) ? store_id[0] : store_id
   const selectedDateKey = toDateKey(selectedDate)
@@ -129,7 +220,7 @@ export default function HomePage() {
       setIsLoading(true)
       setError('')
       try {
-        const [storeResult, shiftResult, resetRequestResult] = await Promise.all([
+        const [storeResult, shiftResult, resetRequestResult, profilesResult, conditionRequestResult, newStaffRequestResult] = await Promise.all([
           supabase.from('stores').select('name, notice').eq('store_id', storeId).maybeSingle(),
           supabase
             .from('monthly_shifts')
@@ -145,10 +236,40 @@ export default function HomePage() {
             .eq('store_id', storeId)
             .eq('pin_reset_requested', true)
             .order('name'),
+          supabase
+            .from('staff')
+            .select('id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, is_employee')
+            .eq('store_id', storeId)
+            .order('name'),
+          (isAdmin
+            ? supabase
+              .from('staff_requests')
+              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
+              .eq('store_id', storeId)
+              .eq('type', 'condition_change')
+            : supabase
+              .from('staff_requests')
+              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
+              .eq('store_id', storeId)
+              .eq('staff_id', currentStaff?.id || '')
+              .eq('type', 'condition_change')
+          ).order('created_at', { ascending: false }),
+          isAdmin
+            ? supabase
+              .from('staff_requests')
+              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
+              .eq('store_id', storeId)
+              .eq('type', 'new_staff')
+              .eq('status', 'pending')
+              .order('created_at', { ascending: false })
+            : Promise.resolve({ data: [], error: null }),
         ])
         if (storeResult.error) throw storeResult.error
         if (shiftResult.error) throw shiftResult.error
         if (resetRequestResult.error) throw resetRequestResult.error
+        if (profilesResult.error) throw profilesResult.error
+        if (conditionRequestResult.error) throw conditionRequestResult.error
+        if (newStaffRequestResult.error) throw newStaffRequestResult.error
         const store = storeResult.data as StoreRecord | null
         const latestShift = shiftResult.data?.[0] as { schedule_data?: unknown } | undefined
         const parsedSchedule = latestShift?.schedule_data
@@ -158,6 +279,9 @@ export default function HomePage() {
         setDraftNotice(store?.notice || '')
         setSchedule(isScheduleData(parsedSchedule) ? parsedSchedule : null)
         setPinResetRequests((resetRequestResult.data || []) as PinResetRequest[])
+        setStaffProfiles((profilesResult.data || []) as StaffProfile[])
+        setConditionRequests((conditionRequestResult.data || []) as StaffRequestRecord[])
+        setNewStaffRequests((newStaffRequestResult.data || []) as StaffRequestRecord[])
       } catch (caughtError) {
         if (isCurrent) setError(caughtError instanceof Error ? caughtError.message : 'ダッシュボードを読み込めませんでした。')
       } finally {
@@ -166,7 +290,20 @@ export default function HomePage() {
     }
     void loadDashboard()
     return () => { isCurrent = false }
-  }, [storeId, targetMonth])
+  }, [currentStaff?.id, isAdmin, storeId, targetMonth])
+
+  const currentProfile = staffProfiles.find(profile => profile.id === currentStaff?.id) || null
+
+  const openConditionRequestModal = () => {
+    if (!currentProfile) return
+    setRequestedWorkDays(String(currentProfile.weekly_target_days || 3))
+    setRequestedMainJob(currentProfile.main_job || 'ホール')
+    setRequestedSkills((currentProfile.skills || '').split(',').map(skill => skill.trim()).filter(Boolean))
+    setRequestedAvailableStart(currentProfile.work_start_1?.slice(0, 5) || '')
+    setRequestedAvailableEnd(currentProfile.work_end_1?.slice(0, 5) || '')
+    setRequestedMemo(currentProfile.memo || '')
+    setIsConditionModalOpen(true)
+  }
 
   useEffect(() => {
     let isCurrent = true
@@ -263,6 +400,176 @@ export default function HomePage() {
     }
   }
 
+  const notifyRequestUpdate = () => {
+    window.dispatchEvent(new Event('staff-request-updated'))
+  }
+
+  const submitConditionChange = async () => {
+    if (!currentStaff || isSubmittingConditionRequest) return
+    if (Boolean(requestedAvailableStart) !== Boolean(requestedAvailableEnd)) {
+      setError('勤務可能時間は開始時刻と終了時刻を両方入力してください。')
+      return
+    }
+    setIsSubmittingConditionRequest(true)
+    setError('')
+    try {
+      const details: ConditionChangeDetails = {
+        weekly_target_days: Number(requestedWorkDays),
+        main_job: requestedMainJob,
+        skills: requestedSkills,
+        available_hours: requestedAvailableStart && requestedAvailableEnd
+          ? { start: requestedAvailableStart, end: requestedAvailableEnd }
+          : null,
+        memo: requestedMemo.trim(),
+      }
+      const { data, error: insertError } = await supabase
+        .from('staff_requests')
+        .insert({
+          store_id: storeId,
+          staff_id: currentStaff.id,
+          type: 'condition_change',
+          details,
+          status: 'pending',
+        })
+        .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
+        .single()
+      if (insertError) throw insertError
+      if (data) setConditionRequests(current => [data as StaffRequestRecord, ...current])
+      setIsConditionModalOpen(false)
+      setSuccessMessage('勤務条件の変更申請を店長へ送信しました。')
+      notifyRequestUpdate()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '変更申請を送信できませんでした。')
+    } finally {
+      setIsSubmittingConditionRequest(false)
+    }
+  }
+
+  const resolveConditionRequest = async (request: StaffRequestRecord, approved: boolean) => {
+    if (!isAdmin || isResolvingConditionRequest) return
+    const details = getConditionChangeDetails(request.details)
+    if (!details) {
+      setError('申請内容を読み込めませんでした。')
+      return
+    }
+    setIsResolvingConditionRequest(request.id)
+    setError('')
+    try {
+      if (approved) {
+        const staffUpdate = {
+          weekly_target_days: details.weekly_target_days,
+          main_job: details.main_job,
+          memo: details.memo,
+          ...(details.skills ? { skills: details.skills.join(',') } : {}),
+          ...(details.available_hours !== undefined ? {
+            work_start_1: details.available_hours?.start || null,
+            work_end_1: details.available_hours?.end || null,
+          } : {}),
+        }
+        const { error: staffUpdateError } = await supabase
+          .from('staff')
+          .update(staffUpdate)
+          .eq('id', request.staff_id)
+          .eq('store_id', storeId)
+        if (staffUpdateError) throw staffUpdateError
+        setStaffProfiles(current => current.map(profile => profile.id === request.staff_id
+          ? {
+            ...profile,
+            weekly_target_days: details.weekly_target_days,
+            main_job: details.main_job,
+            memo: details.memo,
+            ...(details.skills ? { skills: details.skills.join(',') } : {}),
+            ...(details.available_hours !== undefined ? {
+              work_start_1: details.available_hours?.start || null,
+              work_end_1: details.available_hours?.end || null,
+            } : {}),
+          }
+          : profile))
+      }
+      const resolvedAt = new Date().toISOString()
+      const { error: requestUpdateError } = await supabase
+        .from('staff_requests')
+        .update({ status: approved ? 'approved' : 'rejected', resolved_at: resolvedAt })
+        .eq('id', request.id)
+        .eq('store_id', storeId)
+      if (requestUpdateError) throw requestUpdateError
+      setConditionRequests(current => current.map(item => item.id === request.id
+        ? { ...item, status: approved ? 'approved' : 'rejected', resolved_at: resolvedAt }
+        : item))
+      setSuccessMessage(approved ? '勤務条件の変更申請を承認しました。' : '勤務条件の変更申請を拒否しました。')
+      notifyRequestUpdate()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '変更申請を更新できませんでした。')
+    } finally {
+      setIsResolvingConditionRequest(null)
+    }
+  }
+
+  const resolveNewStaffRequest = async (request: StaffRequestRecord, approved: boolean) => {
+    if (!isAdmin || isResolvingNewStaffRequest) return
+    const details = getNewStaffRegistrationDetails(request.details)
+    if (!details) {
+      setError('新規登録申請の内容を読み込めませんでした。')
+      return
+    }
+    setIsResolvingNewStaffRequest(request.id)
+    setError('')
+    try {
+      if (approved) {
+        const { error: updateError } = await supabase
+          .from('staff_requests')
+          .update({ status: 'approved', resolved_at: new Date().toISOString() })
+          .eq('id', request.id)
+          .eq('store_id', storeId)
+        if (updateError) throw updateError
+        setSuccessMessage(`${details.name}さんの新規登録を承認しました。`)
+      } else {
+        const { error: deleteError } = await supabase
+          .from('staff')
+          .delete()
+          .eq('id', request.staff_id)
+          .eq('store_id', storeId)
+        if (deleteError) throw deleteError
+        setStaffProfiles(current => current.filter(profile => profile.id !== request.staff_id))
+        setSuccessMessage(`${details.name}さんの新規登録申請を却下しました。`)
+      }
+      setNewStaffRequests(current => current.filter(item => item.id !== request.id))
+      notifyRequestUpdate()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '新規登録申請を更新できませんでした。')
+    } finally {
+      setIsResolvingNewStaffRequest(null)
+    }
+  }
+
+  const markConditionRequestAsRead = async (request: StaffRequestRecord) => {
+    try {
+      const { error: updateError } = await supabase
+        .from('staff_requests')
+        .update({ is_read_by_staff: true })
+        .eq('id', request.id)
+        .eq('staff_id', currentStaff?.id)
+      if (updateError) throw updateError
+      setConditionRequests(current => current.map(item => item.id === request.id ? { ...item, is_read_by_staff: true } : item))
+      notifyRequestUpdate()
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '通知を確認済みにできませんでした。')
+    }
+  }
+
+  const pendingConditionRequests = conditionRequests.filter(request => request.status === 'pending')
+  const unreadConditionResults = conditionRequests.filter(request =>
+    request.staff_id === currentStaff?.id && request.status !== 'pending' && !request.is_read_by_staff
+  )
+  const getRequestStaff = (staffId: string) => staffProfiles.find(profile => profile.id === staffId)
+  const currentSkills = (currentProfile?.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
+  const requestedSkillOptions = Array.from(new Set([...STANDARD_SKILL_OPTIONS, ...requestedSkills]))
+  const toggleRequestedSkill = (skill: string) => {
+    setRequestedSkills(current => current.includes(skill)
+      ? current.filter(item => item !== skill)
+      : [...current, skill])
+  }
+
   if (isLoading) {
     return <div className="flex min-h-[60vh] items-center justify-center text-sm text-slate-500">ダッシュボードを読み込み中です…</div>
   }
@@ -307,6 +614,81 @@ export default function HomePage() {
           </div>
         </section>
       )}
+
+      {isAdmin && newStaffRequests.length > 0 && (
+        <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><UserRoundPen size={17} className="text-slate-500" />新規スタッフ登録申請</div>
+          <div className="mt-3 space-y-2">
+            {newStaffRequests.map(request => {
+              const details = getNewStaffRegistrationDetails(request.details)
+              if (!details) return null
+              return (
+                <div key={request.id} className="rounded-md border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">{details.name}さん（{details.employment_type} / {details.main_job}）から新規登録申請が届いています</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">週の希望勤務日数: 週{details.weekly_target_days}日　申請日時: {new Date(request.created_at).toLocaleString('ja-JP')}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => void resolveNewStaffRequest(request, false)} disabled={isResolvingNewStaffRequest !== null} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">却下</button>
+                      <button type="button" onClick={() => void resolveNewStaffRequest(request, true)} disabled={isResolvingNewStaffRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">承認</button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {isAdmin && pendingConditionRequests.length > 0 && (
+        <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><FileCheck2 size={17} className="text-slate-500" />勤務条件の変更申請</div>
+          <div className="mt-3 space-y-2">
+            {pendingConditionRequests.map(request => {
+              const details = getConditionChangeDetails(request.details)
+              const staff = getRequestStaff(request.staff_id)
+              if (!details) return null
+              return (
+                <div key={request.id} className="rounded-md border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">{staff?.name || 'スタッフ'}さんの勤務条件変更</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">申請日時: {new Date(request.created_at).toLocaleString('ja-JP')}</p>
+                      <div className="mt-3 space-y-1 text-xs text-slate-600">
+                        <p>週希望日数: {staff?.weekly_target_days || '未設定'}日 → {details.weekly_target_days}日</p>
+                        <p>メイン職種: {staff?.main_job || '未設定'} → {details.main_job}</p>
+                        {details.skills && <p>習得スキル: {details.skills.length > 0 ? details.skills.join('、') : '登録なし'}</p>}
+                        {details.available_hours !== undefined && <p>基本出勤可能時間: {details.available_hours ? `${details.available_hours.start}〜${details.available_hours.end}` : '登録なし'}</p>}
+                        <p className="whitespace-pre-wrap">補足メモ: {staff?.memo || '未設定'} → {details.memo || '未設定'}</p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => void resolveConditionRequest(request, false)} disabled={isResolvingConditionRequest !== null} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">拒否</button>
+                      <button type="button" onClick={() => void resolveConditionRequest(request, true)} disabled={isResolvingConditionRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">承認</button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {!isAdmin && unreadConditionResults.map(request => (
+        <section key={request.id} className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <FileCheck2 size={18} className="mt-0.5 shrink-0 text-slate-500" />
+              <div>
+                <h2 className="text-sm font-semibold text-slate-800">勤務条件の変更申請</h2>
+                <p className="mt-1 text-sm text-slate-700">店長が勤務条件の変更申請を{request.status === 'approved' ? '承認' : '拒否'}しました。</p>
+              </div>
+            </div>
+            <button type="button" onClick={() => void markConditionRequestAsRead(request)} className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50">確認</button>
+          </div>
+        </section>
+      ))}
 
       <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
         <div className="flex items-start justify-between gap-4">
@@ -415,6 +797,65 @@ export default function HomePage() {
           <span className="ml-3 h-2 w-2 rounded-full bg-rose-500" />現在時刻
         </div>
       </section>
+
+      {!isAdmin && currentProfile && (
+        <section className="mb-5 rounded-md border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <UserRoundPen size={18} className="mt-0.5 shrink-0 text-slate-500" />
+              <div>
+                <h2 className="text-sm font-semibold text-slate-800">現在の登録勤務条件</h2>
+                <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                  <div><dt className="text-xs font-medium text-slate-500">週の希望勤務日数</dt><dd className="mt-0.5 font-medium text-slate-800">週{currentProfile.weekly_target_days || 3}日</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-500">メイン職種</dt><dd className="mt-0.5 font-medium text-slate-800">{currentProfile.main_job || '未設定'}</dd></div>
+                  <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">習得スキル</dt><dd className="mt-1 flex flex-wrap gap-1.5">{currentSkills.length > 0 ? currentSkills.map(skill => <span key={skill} className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{skill}</span>) : <span className="text-sm text-slate-600">登録なし</span>}</dd></div>
+                  <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">基本出勤可能時間</dt><dd className="mt-0.5 font-medium text-slate-800">{currentProfile.work_start_1 && currentProfile.work_end_1 ? `${currentProfile.work_start_1.slice(0, 5)}〜${currentProfile.work_end_1.slice(0, 5)}` : '登録なし'}</dd></div>
+                  <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">勤務に関する補足メモ</dt><dd className="mt-0.5 whitespace-pre-wrap text-slate-700">{currentProfile.memo || '登録されていません'}</dd></div>
+                </dl>
+              </div>
+            </div>
+            <button type="button" onClick={openConditionRequestModal} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"><UserRoundPen size={15} className="text-slate-500" />条件の変更を申請する</button>
+          </div>
+        </section>
+      )}
+
+      {isConditionModalOpen && currentProfile && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setIsConditionModalOpen(false) }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="condition-request-title" className="w-full max-w-md rounded-md border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 id="condition-request-title" className="text-sm font-semibold text-slate-800">勤務条件の変更を申請</h2>
+              <p className="mt-1 text-xs text-slate-500">店長の承認後に登録内容へ反映されます。</p>
+            </div>
+            <div className="space-y-4 p-5">
+              <label className="block"><span className="text-xs font-medium text-slate-700">週の希望勤務日数</span><select value={requestedWorkDays} onChange={event => setRequestedWorkDays(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">{[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}</select></label>
+              <label className="block"><span className="text-xs font-medium text-slate-700">メイン職種</span><select value={requestedMainJob} onChange={event => setRequestedMainJob(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="ホール">ホール</option><option value="キッチン">キッチン</option><option value="共通">共通</option></select></label>
+              <fieldset>
+                <legend className="text-xs font-medium text-slate-700">習得スキル</legend>
+                <p className="mt-1 text-xs text-slate-500">できるようになったポジションを選択してください。</p>
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {requestedSkillOptions.map(skill => (
+                    <label key={skill} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 transition hover:bg-slate-50">
+                      <input type="checkbox" checked={requestedSkills.includes(skill)} onChange={() => toggleRequestedSkill(skill)} className="h-3.5 w-3.5 rounded border-slate-300 text-slate-800 focus:ring-slate-500" />
+                      <span>{skill}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend className="text-xs font-medium text-slate-700">基本出勤可能時間</legend>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input type="time" value={requestedAvailableStart} onChange={event => setRequestedAvailableStart(event.target.value)} className="h-10 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500" />
+                  <span className="text-xs text-slate-500">〜</span>
+                  <input type="time" value={requestedAvailableEnd} onChange={event => setRequestedAvailableEnd(event.target.value)} className="h-10 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500" />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">未設定にする場合は両方の入力を空にしてください。</p>
+              </fieldset>
+              <label className="block"><span className="text-xs font-medium text-slate-700">勤務に関する補足メモ</span><textarea value={requestedMemo} onChange={event => setRequestedMemo(event.target.value)} rows={4} className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-slate-500" /></label>
+              <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsConditionModalOpen(false)} disabled={isSubmittingConditionRequest} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button><button type="button" onClick={() => void submitConditionChange()} disabled={isSubmittingConditionRequest} className="rounded-md bg-slate-800 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">店長に申請する</button></div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {isChangingPin && currentStaff && (
         <PinLoginModal
