@@ -3,11 +3,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import {
+  AlertTriangle,
+  CalendarCheck2,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
   Edit3,
   KeyRound,
+  Megaphone,
   Store,
 } from 'lucide-react'
 import PinLoginModal from '@/components/PinLoginModal'
@@ -191,11 +194,11 @@ export default function HomePage() {
   const selectedShift = todayPerson?.shifts?.[selectedDateKey] || ''
   const isSelectedDateToday = selectedDateKey === todayKey
   const relativeDayLabel = getRelativeDayLabel(selectedDate, today)
-  const myShiftSummary = hasRequestedDayOff
-    ? '📝 今日のシフト: 休み希望提出済み'
+  const shiftStatus = hasRequestedDayOff
+    ? 'requested'
     : !selectedShift || selectedShift === '×'
-      ? '☕ 今日のシフト: 公休（休み）'
-      : `☀️ 今日のシフト: ${selectedShift}`
+      ? 'off'
+      : 'working'
   const currentTime = new Date()
   const currentHour = currentTime.getHours() + currentTime.getMinutes() / 60
   const currentNowPosition = isSelectedDateToday && currentHour >= 9 && currentHour <= 24
@@ -268,19 +271,18 @@ export default function HomePage() {
     <div className="mx-auto max-w-[1800px] p-4 pb-28 md:p-8 md:pb-10">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Store dashboard</p>
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white"><Store size={19} /></span>
+            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-600"><Store size={18} /></span>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">{storeName || storeId}</h1>
-              <p className="mt-0.5 text-sm text-slate-500">{currentStaff?.name || 'スタッフ'} · {isAdmin ? '管理者' : '従業員'}</p>
+              <h1 className="text-xl font-bold text-slate-900">{storeName || storeId}</h1>
+              <p className="mt-0.5 text-xs font-medium text-slate-500">{currentStaff?.name || 'スタッフ'} · {isAdmin ? '管理者' : '従業員'}</p>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {currentStaff?.pin_hash && (
-            <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-              <KeyRound size={14} />暗証番号を変更
+            <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
+              <KeyRound size={16} className="text-slate-500" />暗証番号を変更
             </button>
           )}
         </div>
@@ -290,15 +292,15 @@ export default function HomePage() {
       {successMessage && <p role="status" className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{successMessage}</p>}
 
       {isAdmin && pinResetRequests.length > 0 && (
-        <section className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">PIN reset requests</p>
-          <div className="mt-3 space-y-3">
+        <section className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle size={17} className="text-amber-700" />暗証番号リセット申請</div>
+          <div className="mt-3 space-y-2">
             {pinResetRequests.map(request => (
               <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-white px-4 py-3">
-                <p className="text-sm font-semibold text-slate-800">⚠️ {request.name}さんから暗証番号のリセット申請が届いています</p>
+                <p className="text-sm font-medium text-slate-800">{request.name}さんから暗証番号のリセット申請が届いています</p>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => void updatePinResetRequest(request, false)} disabled={isUpdatingResetRequest !== null} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">拒否</button>
-                  <button type="button" onClick={() => void updatePinResetRequest(request, true)} disabled={isUpdatingResetRequest !== null} className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50">初期化（承認）</button>
+                  <button type="button" onClick={() => void updatePinResetRequest(request, false)} disabled={isUpdatingResetRequest !== null} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">拒否</button>
+                  <button type="button" onClick={() => void updatePinResetRequest(request, true)} disabled={isUpdatingResetRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">初期化（承認）</button>
                 </div>
               </div>
             ))}
@@ -306,40 +308,52 @@ export default function HomePage() {
         </section>
       )}
 
-      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Store notice</p>
-            <h2 className="mt-1 text-sm font-bold text-slate-900">📢 店舗からのお知らせ</h2>
-          </div>
-          {isAdmin && <button type="button" onClick={() => setIsEditingNotice(true)} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"><Edit3 size={12} />✎ 編集</button>}
-        </div>
-        {isEditingNotice ? (
-          <div className="p-4">
-            <textarea value={draftNotice} onChange={event => setDraftNotice(event.target.value)} className="min-h-28 w-full rounded-md border border-slate-300 bg-white p-3 text-sm outline-none focus:border-slate-500" rows={5} />
-            <div className="mt-3 flex justify-end gap-2">
-              <button type="button" onClick={() => { setDraftNotice(notice === '現在の店舗からのお知らせはありません。' ? '' : notice); setIsEditingNotice(false) }} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">キャンセル</button>
-              <button type="button" disabled={isSavingNotice} onClick={saveNotice} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{isSavingNotice ? '保存中…' : '保存'}</button>
+      <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <Megaphone size={18} className="mt-0.5 shrink-0 text-slate-500" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-slate-800">店舗からのお知らせ</h2>
+              {!isEditingNotice && <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{notice}</div>}
             </div>
           </div>
-        ) : <div className="whitespace-pre-wrap p-5 text-sm leading-6 text-slate-600">{notice}</div>}
+          {isAdmin && <button type="button" onClick={() => setIsEditingNotice(true)} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"><Edit3 size={14} className="text-slate-500" />編集</button>}
+        </div>
+        {isEditingNotice ? (
+          <div className="mt-3">
+            <textarea value={draftNotice} onChange={event => setDraftNotice(event.target.value)} className="min-h-28 w-full rounded-md border border-slate-300 bg-white p-3 text-sm outline-none focus:border-slate-500" rows={5} />
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => { setDraftNotice(notice === '現在の店舗からのお知らせはありません。' ? '' : notice); setIsEditingNotice(false) }} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button>
+              <button type="button" disabled={isSavingNotice} onClick={saveNotice} className="rounded-md bg-slate-800 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">{isSavingNotice ? '保存中…' : '保存'}</button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
-      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4 py-4 md:px-5">
-          <p className="text-sm font-semibold text-slate-900">{myShiftSummary}</p>
+      <section className="mb-5 rounded-md border border-slate-200 bg-white px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <CalendarCheck2 size={18} className="text-slate-500" />
+            <div>
+              <p className="text-xs font-medium text-slate-500">本日の勤務予定</p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {shiftStatus === 'working' && <><span className="text-sm font-bold text-slate-900">{selectedShift}</span><span className="rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">出勤</span></>}
+                {shiftStatus === 'off' && <span className="rounded border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">公休</span>}
+                {shiftStatus === 'requested' && <span className="rounded border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">希望休</span>}
+              </div>
+            </div>
+          </div>
           <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
             <CalendarDays size={15} />
-            <span className={isSelectedDateToday ? 'font-semibold text-emerald-700' : 'font-semibold text-sky-700'}>{relativeDayLabel}</span>
+            <span className={isSelectedDateToday ? 'font-medium text-emerald-700' : 'font-medium text-sky-700'}>{relativeDayLabel}</span>
           </div>
         </div>
       </section>
 
-      <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="mb-5 overflow-hidden rounded-md border border-slate-200 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-4 py-4 md:px-5">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Daily time table</p>
-            <h2 className="mt-1 text-lg font-bold text-slate-900">当日のタイムテーブル</h2>
+            <h2 className="text-sm font-semibold text-slate-800">当日のタイムテーブル</h2>
           </div>
           <div className="flex items-center rounded-md border border-slate-200 bg-white">
             <button type="button" onClick={() => changeSelectedDate(-1)} aria-label="前日" className="p-3 text-slate-600 transition hover:bg-slate-50"><ChevronLeft size={18} /></button>
@@ -352,7 +366,7 @@ export default function HomePage() {
         <div className="overflow-x-auto">
           <div className="relative min-w-[980px]">
             <div className="grid grid-cols-[170px_repeat(15,minmax(52px,1fr))] border-b border-slate-200 bg-slate-50">
-              <div className="border-r border-slate-200 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500">Staff</div>
+              <div className="border-r border-slate-200 px-4 py-3 text-xs font-medium text-slate-500">スタッフ</div>
               {Array.from({ length: 15 }, (_, index) => {
                 const hour = index + 9
                 return <div key={hour} className="border-r border-slate-100 px-1 py-3 text-center text-[10px] font-semibold text-slate-500">{String(hour).padStart(2, '0')}:00</div>
@@ -362,7 +376,7 @@ export default function HomePage() {
             {currentNowPosition !== null && (
               <div className="pointer-events-none absolute bottom-0 left-[170px] top-0 z-20" style={{ width: 'calc(100% - 170px)' }}>
                 <div className="absolute bottom-0 top-0 w-0.5 bg-red-500" style={{ left: `${currentNowPosition * 100}%` }}>
-                  <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-red-500 px-2 py-1 text-[10px] font-bold text-white shadow-sm">📍 {currentTimeLabel}</span>
+                  <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded-sm bg-red-500 px-1.5 py-0.5 font-mono text-[11px] font-medium text-white shadow-sm">{currentTimeLabel}</span>
                 </div>
               </div>
             )}
