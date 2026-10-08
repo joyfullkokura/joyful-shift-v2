@@ -6,7 +6,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Edit3,
   KeyRound,
   Store,
@@ -39,6 +38,10 @@ type StoreRecord = {
 type PinResetRequest = {
   id: string
   name: string
+}
+
+type ShiftRequest = {
+  is_off?: boolean | null
 }
 
 const toDateKey = (date: Date) => {
@@ -108,6 +111,7 @@ export default function HomePage() {
   const [pinResetRequests, setPinResetRequests] = useState<PinResetRequest[]>([])
   const [isUpdatingResetRequest, setIsUpdatingResetRequest] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState('')
+  const [hasRequestedDayOff, setHasRequestedDayOff] = useState(false)
   const [error, setError] = useState('')
 
   const storeId = Array.isArray(store_id) ? store_id[0] : store_id
@@ -161,11 +165,43 @@ export default function HomePage() {
     return () => { isCurrent = false }
   }, [storeId, targetMonth])
 
+  useEffect(() => {
+    let isCurrent = true
+    const loadDayOffRequest = async () => {
+      if (!currentStaff?.id) {
+        setHasRequestedDayOff(false)
+        return
+      }
+      const { data, error: requestError } = await supabase
+        .from('shift_requests')
+        .select('is_off')
+        .eq('store_id', storeId)
+        .eq('staff_id', currentStaff.id)
+        .eq('date', selectedDateKey)
+        .maybeSingle()
+      if (!isCurrent || requestError) return
+      setHasRequestedDayOff(Boolean((data as ShiftRequest | null)?.is_off))
+    }
+    void loadDayOffRequest()
+    return () => { isCurrent = false }
+  }, [currentStaff?.id, selectedDateKey, storeId])
+
   const schedulePeople = useMemo(() => schedule?.staff || [], [schedule])
   const todayPerson = schedulePeople.find(person => person.id === currentStaff?.id)
   const selectedShift = todayPerson?.shifts?.[selectedDateKey] || ''
   const isSelectedDateToday = selectedDateKey === todayKey
   const relativeDayLabel = getRelativeDayLabel(selectedDate, today)
+  const myShiftSummary = hasRequestedDayOff
+    ? '📝 今日のシフト: 休み希望提出済み'
+    : !selectedShift || selectedShift === '×'
+      ? '☕ 今日のシフト: 公休（休み）'
+      : `☀️ 今日のシフト: ${selectedShift}`
+  const currentTime = new Date()
+  const currentHour = currentTime.getHours() + currentTime.getMinutes() / 60
+  const currentNowPosition = isSelectedDateToday && currentHour >= 9 && currentHour <= 24
+    ? Math.max(0, Math.min(1, (currentHour - 9) / 15))
+    : null
+  const currentTimeLabel = currentTime.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
   const scheduledPeople = useMemo(() => schedulePeople
     .map(person => {
       const shift = shiftLabel(person.shifts?.[selectedDateKey])
@@ -290,22 +326,8 @@ export default function HomePage() {
       </section>
 
       <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 p-4 md:p-5">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">自分のシフト</p>
-            <h2 className="mt-1 text-2xl font-bold text-slate-900">{selectedShift || '勤務なし'}</h2>
-            <p className="mt-1 text-sm text-slate-500">{currentStaff?.name || 'スタッフ'}の{selectedDate.getMonth() + 1}月{selectedDate.getDate()}日の予定</p>
-          </div>
-          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-            <Clock3 size={15} />
-            {new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-          </div>
-        </div>
-        <div className="grid gap-4 p-4 md:grid-cols-[1fr_auto] md:p-5">
-          <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold text-slate-500">当日シフト</p>
-            <p className="mt-2 text-lg font-bold text-slate-900">{selectedShift || 'シフト未登録'}</p>
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4 py-4 md:px-5">
+          <p className="text-sm font-semibold text-slate-900">{myShiftSummary}</p>
           <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
             <CalendarDays size={15} />
             <span className={isSelectedDateToday ? 'font-semibold text-emerald-700' : 'font-semibold text-sky-700'}>{relativeDayLabel}</span>
@@ -337,16 +359,17 @@ export default function HomePage() {
               })}
             </div>
 
+            {currentNowPosition !== null && (
+              <div className="pointer-events-none absolute bottom-0 left-[170px] top-0 z-20" style={{ width: 'calc(100% - 170px)' }}>
+                <div className="absolute bottom-0 top-0 w-0.5 bg-red-500" style={{ left: `${currentNowPosition * 100}%` }}>
+                  <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-red-500 px-2 py-1 text-[10px] font-bold text-white shadow-sm">📍 {currentTimeLabel}</span>
+                </div>
+              </div>
+            )}
+
             {scheduledPeople.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-slate-500">本日の出勤予定者はいません</div>
             ) : scheduledPeople.map(({ person, shift, position }) => {
-              const currentNowPosition = (() => {
-                if (!isSelectedDateToday) return null
-                const now = new Date()
-                const currentHour = now.getHours() + now.getMinutes() / 60
-                if (currentHour < 9 || currentHour > 24) return null
-                return Math.max(0, Math.min(1, (currentHour - 9) / 15))
-              })()
               return (
                 <div key={person.id} className="grid min-h-16 grid-cols-[170px_minmax(0,1fr)] border-b border-slate-100 last:border-0">
                   <div className="flex items-center gap-2 border-r border-slate-200 px-4 py-3">
@@ -364,11 +387,6 @@ export default function HomePage() {
                         }}
                       >
                         {shift}
-                      </div>
-                    )}
-                    {currentNowPosition !== null && currentNowPosition !== undefined && (
-                      <div className="pointer-events-none absolute inset-y-0 z-20 w-px bg-rose-500" style={{ left: `${currentNowPosition * 100}%` }}>
-                        <span className="absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Now</span>
                       </div>
                     )}
                   </div>
