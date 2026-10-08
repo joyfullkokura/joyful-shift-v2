@@ -36,6 +36,11 @@ type StoreRecord = {
   notice?: string | null
 }
 
+type PinResetRequest = {
+  id: string
+  name: string
+}
+
 const toDateKey = (date: Date) => {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -100,6 +105,9 @@ export default function HomePage() {
   const [selectedDate, setSelectedDate] = useState(() => startOfLocalDay(new Date()))
   const [isLoading, setIsLoading] = useState(true)
   const [isSavingNotice, setIsSavingNotice] = useState(false)
+  const [pinResetRequests, setPinResetRequests] = useState<PinResetRequest[]>([])
+  const [isUpdatingResetRequest, setIsUpdatingResetRequest] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState('')
   const [error, setError] = useState('')
 
   const storeId = Array.isArray(store_id) ? store_id[0] : store_id
@@ -114,7 +122,7 @@ export default function HomePage() {
       setIsLoading(true)
       setError('')
       try {
-        const [storeResult, shiftResult] = await Promise.all([
+        const [storeResult, shiftResult, resetRequestResult] = await Promise.all([
           supabase.from('stores').select('name, notice').eq('store_id', storeId).maybeSingle(),
           supabase
             .from('monthly_shifts')
@@ -124,9 +132,16 @@ export default function HomePage() {
             .eq('status', 'confirmed')
             .order('created_at', { ascending: false })
             .limit(1),
+          supabase
+            .from('staff')
+            .select('id, name')
+            .eq('store_id', storeId)
+            .eq('pin_reset_requested', true)
+            .order('name'),
         ])
         if (storeResult.error) throw storeResult.error
         if (shiftResult.error) throw shiftResult.error
+        if (resetRequestResult.error) throw resetRequestResult.error
         const store = storeResult.data as StoreRecord | null
         const latestShift = shiftResult.data?.[0] as { schedule_data?: unknown } | undefined
         const parsedSchedule = latestShift?.schedule_data
@@ -135,6 +150,7 @@ export default function HomePage() {
         setNotice(store?.notice || '現在の店内お知らせはありません。')
         setDraftNotice(store?.notice || '')
         setSchedule(isScheduleData(parsedSchedule) ? parsedSchedule : null)
+        setPinResetRequests((resetRequestResult.data || []) as PinResetRequest[])
       } catch (caughtError) {
         if (isCurrent) setError(caughtError instanceof Error ? caughtError.message : 'ダッシュボードを読み込めませんでした。')
       } finally {
@@ -183,6 +199,31 @@ export default function HomePage() {
     }
   }
 
+  const updatePinResetRequest = async (request: PinResetRequest, approved: boolean) => {
+    if (!isAdmin || isUpdatingResetRequest) return
+    setIsUpdatingResetRequest(request.id)
+    setError('')
+    try {
+      const update = approved
+        ? { pin_hash: null, pin_reset_requested: false }
+        : { pin_reset_requested: false }
+      const { error: updateError } = await supabase
+        .from('staff')
+        .update(update)
+        .eq('id', request.id)
+        .eq('store_id', storeId)
+      if (updateError) throw updateError
+      setPinResetRequests(current => current.filter(item => item.id !== request.id))
+      setSuccessMessage(approved
+        ? `${request.name}さんの暗証番号を初期化しました。`
+        : `${request.name}さんのリセット申請を拒否しました。`)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'リセット申請を更新できませんでした。')
+    } finally {
+      setIsUpdatingResetRequest(null)
+    }
+  }
+
   if (isLoading) {
     return <div className="flex min-h-[60vh] items-center justify-center text-sm text-slate-500">ダッシュボードを読み込み中です…</div>
   }
@@ -210,6 +251,24 @@ export default function HomePage() {
       </header>
 
       {error && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
+      {successMessage && <p role="status" className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{successMessage}</p>}
+
+      {isAdmin && pinResetRequests.length > 0 && (
+        <section className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">PIN reset requests</p>
+          <div className="mt-3 space-y-3">
+            {pinResetRequests.map(request => (
+              <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-white px-4 py-3">
+                <p className="text-sm font-semibold text-slate-800">⚠️ {request.name}さんから暗証番号のリセット申請が届いています</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => void updatePinResetRequest(request, false)} disabled={isUpdatingResetRequest !== null} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">拒否</button>
+                  <button type="button" onClick={() => void updatePinResetRequest(request, true)} disabled={isUpdatingResetRequest !== null} className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50">初期化（承認）</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
@@ -298,7 +357,7 @@ export default function HomePage() {
                     {Array.from({ length: 15 }, (_, index) => <div key={index} className="border-r border-slate-100" />)}
                     {position && (
                       <div
-                        className="absolute top-1/2 z-10 flex h-8 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md bg-slate-900 px-2 text-[10px] font-bold text-white shadow-sm"
+                        className={`absolute top-1/2 z-10 flex h-8 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md px-2 text-[10px] shadow-sm ${person.id === currentStaff?.id || person.name === currentStaff?.name ? 'bg-orange-500 font-semibold text-white shadow-orange-200' : 'bg-slate-900 font-bold text-white'}`}
                         style={{
                           left: `${position.startPosition * 100}%`,
                           width: `${(position.endPosition - position.startPosition) * 100}%`,

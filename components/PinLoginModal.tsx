@@ -31,6 +31,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [stage, setStage] = useState<PinStage>(() => requestedMode === 'change' ? 'current' : 'pin')
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
+  const [resetRequestMessage, setResetRequestMessage] = useState('')
   const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
 
   const resetPin = useCallback(() => {
@@ -68,8 +69,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         if (mode === 'login') {
           const pinHash = await hashPin(value)
           if (pinHash !== staff.pin_hash) {
-            setError('暗証番号が一致しませんでした。もう一度入力してください。')
-            resetPin()
+            if (value.length === MAX_PIN_LENGTH) {
+              setError('暗証番号が一致しませんでした。もう一度入力してください。')
+              resetPin()
+            } else {
+              setIsProcessing(false)
+            }
             return
           }
           onSuccess(staff)
@@ -108,6 +113,47 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
     setError('')
   }, [confirmPin.length, isProcessing, pin.length, stage])
 
+  useEffect(() => {
+    if (mode !== 'login' || stage !== 'pin' || pin.length < MIN_PIN_LENGTH || isProcessing) return
+    let isCurrent = true
+
+    const authenticate = async () => {
+      const pinHash = await hashPin(pin)
+      if (!isCurrent) return
+      if (pinHash === staff.pin_hash) {
+        onSuccess(staff)
+        return
+      }
+      if (pin.length === MAX_PIN_LENGTH) {
+        setError('暗証番号が一致しませんでした。もう一度入力してください。')
+        setPin('')
+      }
+    }
+
+    void authenticate()
+    return () => { isCurrent = false }
+  }, [isProcessing, mode, onSuccess, pin, staff, stage])
+
+  const requestPinReset = useCallback(async () => {
+    if (!window.confirm('社員に暗証番号のリセットを申請しますか？')) return
+    setError('')
+    setResetRequestMessage('')
+    setIsProcessing(true)
+    try {
+      const { error: updateError } = await supabase
+        .from('staff')
+        .update({ pin_reset_requested: true })
+        .eq('id', staff.id)
+        .eq('store_id', storeId)
+      if (updateError) throw updateError
+      setResetRequestMessage('申請を送信しました。社員の承認をお待ちください。')
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'リセット申請を送信できませんでした。')
+    } finally {
+      setIsProcessing(false)
+    }
+  }, [staff.id, storeId])
+
   const deleteDigit = useCallback(() => {
     if (isProcessing) return
     if (stage === 'confirm') setConfirmPin(current => current.slice(0, -1))
@@ -138,7 +184,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const activePin = stage === 'confirm' ? confirmPin : pin
   const displayLabel = stage === 'confirm' ? '再入力状態' : stage === 'current' ? '現在の暗証番号' : stage === 'new' ? '新しい暗証番号' : '暗証番号'
   const statusLabel = mode === 'login'
-    ? '4〜8桁を入力してEnterを押してください。'
+    ? '4〜8桁を入力すると自動的に認証されます。'
     : stage === 'current'
       ? '現在の暗証番号を入力してEnterを押してください。'
       : stage === 'confirm'
@@ -175,6 +221,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           </div>
           <p className="mt-3 min-h-5 text-center text-xs font-medium text-slate-600">{statusLabel}</p>
           {error && <p role="alert" className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
+          {resetRequestMessage && <p role="status" className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-center text-xs text-emerald-700">{resetRequestMessage}</p>}
 
           <div className="mt-4 grid grid-cols-3 gap-2">
             {DIGITS.map(digit => (
@@ -187,7 +234,11 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
             <button type="button" onClick={onClose} className="rounded-md border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">キャンセル</button>
             <button type="button" onClick={() => void submitCurrent()} disabled={isProcessing || activePin.length < MIN_PIN_LENGTH} className="rounded-md bg-slate-900 px-5 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{stage === 'confirm' ? '確認' : '次へ進む'}</button>
           </div>
-          <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">※暗証番号を忘れた場合は、社員にリセットを依頼してください</p>
+          {mode === 'login' && (
+            <button type="button" onClick={() => void requestPinReset()} disabled={isProcessing} className="mt-4 w-full text-center text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+              暗証番号を忘れた場合は、社員にリセットを申請
+            </button>
+          )}
           <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}</div>
         </div>
       </section>

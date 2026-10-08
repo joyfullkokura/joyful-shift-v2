@@ -2,7 +2,7 @@
 
 import { startTransition, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import { CalendarDays, ChevronLeft, ChevronRight, Printer, Users, Clock3 } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Printer, Users, Clock3, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAdmin } from '@/context/AdminContext'
 
@@ -56,6 +56,19 @@ const isConfirmedSchedule = (value: unknown): value is ConfirmedSchedule => {
     )
 }
 
+const getShiftPosition = (shift: string) => {
+  const match = shift.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/)
+  if (!match) return null
+  const toHour = (hours: number, minutes: number) => hours + minutes / 60
+  const start = toHour(Number(match[1]), Number(match[2]))
+  const end = toHour(Number(match[3]), Number(match[4]))
+  if (end < start) return null
+  return {
+    startPosition: Math.max(0, Math.min(1, (start - 9) / 15)),
+    endPosition: Math.max(0, Math.min(1, (end - 9) / 15)),
+  }
+}
+
 export default function ViewShiftPage() {
   const params = useParams<{ store_id: string }>()
   const storeId = params.store_id
@@ -69,6 +82,7 @@ export default function ViewShiftPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [highlightedStaffId, setHighlightedStaffId] = useState(currentStaff?.id || '')
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
 
   const year = viewDate.getFullYear()
   const month = viewDate.getMonth() + 1
@@ -129,6 +143,13 @@ export default function ViewShiftPage() {
     ?? schedule?.staff.reduce((total, person) => total + (Number(person.assignedHours) || 0), 0)
     ?? 0
   const currentPerson = schedule?.staff.find(person => person.id === currentStaff?.id)
+  const selectedDateParts = selectedDate ? new Date(selectedDate + 'T00:00:00') : null
+  const selectedDayStaff = (schedule?.staff || [])
+    .map(person => {
+      const shift = selectedDate ? person.shifts?.[selectedDate] || '' : ''
+      return { person, shift, position: getShiftPosition(shift) }
+    })
+    .filter(({ position }) => position !== null)
 
   return (
     <div className="mx-auto max-w-[1600px] p-4 pb-10 md:p-8 print:max-w-none print:p-0">
@@ -197,12 +218,12 @@ export default function ViewShiftPage() {
                     ? 'border-slate-200 bg-slate-50 text-slate-500'
                     : 'border-amber-200 bg-amber-50/60 text-slate-800'
                   return (
-                    <div key={date} className={`flex min-h-[72px] flex-col rounded-md border p-1.5 md:min-h-[92px] md:p-2 ${tone}`}>
+                    <button type="button" key={date} onClick={() => setSelectedDate(date)} className={`flex min-h-[72px] w-full flex-col rounded-md border p-1.5 text-left transition hover:bg-slate-50 md:min-h-[92px] md:p-2 ${tone}`}>
                       <span className={`text-[10px] font-semibold ${weekday === 0 || holiday ? 'text-red-600' : weekday === 6 ? 'text-blue-600' : 'text-slate-600'}`}>{day}日</span>
                       {isOff
                         ? <span className="mt-auto text-center text-[10px] text-slate-400">休み</span>
                         : <span className="mt-auto break-words text-center text-[9px] font-semibold leading-tight md:text-[11px]">{shift}</span>}
-                    </div>
+                    </button>
                   )
                 })}
               </div>
@@ -234,7 +255,7 @@ export default function ViewShiftPage() {
                         ? 'bg-blue-50/40 text-blue-600'
                         : 'bg-slate-50'
                     return (
-                      <th key={date} className={`w-[52px] min-w-[52px] border-b border-slate-200 px-0.5 py-2 text-center font-semibold ${dayClass}`} title={holiday || undefined}>
+                      <th key={date} onClick={() => setSelectedDate(date)} className={`w-[52px] min-w-[52px] cursor-pointer border-b border-slate-200 px-0.5 py-2 text-center font-semibold transition hover:bg-slate-50 ${dayClass}`} title={holiday || undefined}>
                         <span className="block">{day}日</span>
                         <span className="block text-[9px] font-normal">{new Date(year, month - 1, day).toLocaleDateString('ja-JP', { weekday: 'short' })}</span>
                       </th>
@@ -265,7 +286,7 @@ export default function ViewShiftPage() {
                             : weekday === 6
                               ? 'bg-blue-50/20 text-slate-700'
                               : 'bg-white text-slate-700'
-                      return <td key={date} className={`w-[52px] min-w-[52px] border-b border-slate-100 px-0.5 py-2 text-center text-[10px] tabular-nums ${cellClass}`}>{shift === '×' ? '×' : shift || '-'}</td>
+                      return <td key={date} onClick={() => setSelectedDate(date)} className={`w-[52px] min-w-[52px] cursor-pointer border-b border-slate-100 px-0.5 py-2 text-center text-[10px] tabular-nums transition hover:bg-slate-50 ${cellClass}`}>{shift === '×' ? '×' : shift || '-'}</td>
                     })}
                     <td className={`w-[76px] min-w-[76px] border-b border-l border-slate-100 px-1 py-2 text-right tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{person.assignedDays}日</td>
                     <td className={`w-[84px] min-w-[84px] border-b border-l border-slate-100 px-2 py-2 text-right font-semibold tabular-nums ${person.id === highlightedStaffId ? 'bg-amber-50' : 'bg-white'}`}>{Number(person.assignedHours || 0).toFixed(1)}h</td>
@@ -275,6 +296,44 @@ export default function ViewShiftPage() {
             </table>
           </div>
         </>
+      )}
+      {selectedDate && selectedDateParts && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedDate(null) }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="shift-detail-title" className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Daily time table</p>
+                <h2 id="shift-detail-title" className="mt-1 text-lg font-semibold text-slate-900">{selectedDateParts.getMonth() + 1}月{selectedDateParts.getDate()}日（{['日', '月', '火', '水', '木', '金', '土'][selectedDateParts.getDay()]}）のシフト状況</h2>
+              </div>
+              <button type="button" onClick={() => setSelectedDate(null)} aria-label="閉じる" className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"><X size={19} /></button>
+            </div>
+            <div className="max-h-[calc(90vh-80px)] overflow-y-auto p-4 md:p-5">
+              <p className="mb-4 text-sm text-slate-600">出勤予定者 {selectedDayStaff.length}名</p>
+              <div className="overflow-x-auto rounded-md border border-slate-200">
+                <div className="min-w-[820px]">
+                  <div className="grid grid-cols-[150px_repeat(15,minmax(44px,1fr))] border-b border-slate-200 bg-slate-50">
+                    <div className="border-r border-slate-200 px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">Staff</div>
+                    {Array.from({ length: 15 }, (_, index) => <div key={index} className="border-r border-slate-100 px-1 py-2.5 text-center text-[10px] font-semibold text-slate-500">{String(index + 9).padStart(2, '0')}:00</div>)}
+                  </div>
+                  {selectedDayStaff.length === 0 ? (
+                    <p className="px-5 py-12 text-center text-sm text-slate-500">この日の出勤予定者はいません</p>
+                  ) : selectedDayStaff.map(({ person, shift, position }) => (
+                    <div key={person.id} className="grid min-h-16 grid-cols-[150px_minmax(0,1fr)] border-b border-slate-100 last:border-0">
+                      <div className="flex items-center gap-2 border-r border-slate-200 px-3 py-3">
+                        <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold ${person.id === currentStaff?.id || person.name === currentStaff?.name ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600'}`}>{person.name.slice(0, 2)}</span>
+                        <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-800">{person.name}</p><p className="truncate text-[10px] text-slate-500">{person.mainJob || '職種未登録'}</p></div>
+                      </div>
+                      <div className="relative grid min-w-0" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr))' }}>
+                        {Array.from({ length: 15 }, (_, index) => <div key={index} className="border-r border-slate-100" />)}
+                        {position && <div className={`absolute top-1/2 z-10 flex h-8 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md px-2 text-[10px] shadow-sm ${person.id === currentStaff?.id || person.name === currentStaff?.name ? 'bg-orange-500 font-semibold text-white shadow-orange-200' : 'bg-slate-900 font-bold text-white'}`} style={{ left: `${position.startPosition * 100}%`, width: `${(position.endPosition - position.startPosition) * 100}%` }}>{shift}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   )
