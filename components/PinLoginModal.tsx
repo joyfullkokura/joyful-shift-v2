@@ -19,6 +19,38 @@ type PinLoginModalProps = {
 const MIN_PIN_LENGTH = 4
 const MAX_PIN_LENGTH = 8
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+const EMPLOYMENT_TYPES = ['学生アルバイト', 'パート', 'フリーター', '契約社員', '社員']
+const TIME_OPTIONS = Array.from({ length: 31 }, (_, index) => {
+  const totalMinutes = 9 * 60 + index * 30
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+})
+
+function AvailabilityRange({ label, description, start, end, onStartChange, onEndChange }: {
+  label: string
+  description: string
+  start: string
+  end: string
+  onStartChange: (value: string) => void
+  onEndChange: (value: string) => void
+}) {
+  return <fieldset className="rounded-md border border-slate-200 p-3">
+    <legend className="px-1 text-xs font-medium text-slate-700">{label}</legend>
+    <p className="-mt-1 text-[11px] text-slate-500">{description}（任意）</p>
+    <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+      <select aria-label={`${label}の開始時刻`} value={start} onChange={event => onStartChange(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
+        <option value="">開始</option>
+        {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
+      </select>
+      <span className="text-xs text-slate-400">〜</span>
+      <select aria-label={`${label}の終了時刻`} value={end} onChange={event => onEndChange(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
+        <option value="">終了</option>
+        {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
+      </select>
+    </div>
+  </fieldset>
+}
 
 async function hashPin(pin: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
@@ -33,9 +65,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
   const [targetWorkDays, setTargetWorkDays] = useState('3')
-  const [employmentType, setEmploymentType] = useState(staff.is_employee ? '社員' : 'アルバイト')
+  const [employmentType, setEmploymentType] = useState(staff.is_employee ? '社員' : '学生アルバイト')
   const [mainJob, setMainJob] = useState('ホール')
-  const [memo, setMemo] = useState('')
+  const [workStart1, setWorkStart1] = useState('')
+  const [workEnd1, setWorkEnd1] = useState('')
+  const [workStart2, setWorkStart2] = useState('')
+  const [workEnd2, setWorkEnd2] = useState('')
   const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
 
   const resetPin = useCallback(() => {
@@ -114,6 +149,16 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
   const completeInitialSetup = useCallback(async () => {
     if (isProcessing) return
+    const hasIncompletePrimaryRange = Boolean(workStart1) !== Boolean(workEnd1)
+    const hasIncompleteSecondaryRange = Boolean(workStart2) !== Boolean(workEnd2)
+    if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
+      setError('出勤可能時間帯は、開始時刻と終了時刻をセットで選択してください。')
+      return
+    }
+    if ((workStart1 && workStart1 >= workEnd1) || (workStart2 && workStart2 >= workEnd2)) {
+      setError('終了時刻は開始時刻より後の時刻を選択してください。')
+      return
+    }
     setIsProcessing(true)
     setError('')
     try {
@@ -124,8 +169,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           pin_hash: pinHash,
           weekly_target_days: Number(targetWorkDays),
           main_job: mainJob,
+          employment_type: employmentType,
           is_employee: employmentType === '社員',
-          memo: memo.trim(),
+          work_start_1: workStart1 || null,
+          work_end_1: workEnd1 || null,
+          work_start_2: workStart2 || null,
+          work_end_2: workEnd2 || null,
         })
         .eq('id', staff.id)
         .eq('store_id', storeId)
@@ -135,7 +184,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
     }
-  }, [employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff, storeId, targetWorkDays])
+  }, [employmentType, isProcessing, mainJob, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -234,7 +283,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="pin-login-title" className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-2xl">
+      <section role="dialog" aria-modal="true" aria-labelledby="pin-login-title" className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white"><KeyRound size={18} /></div>
@@ -259,9 +308,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
                 <label className="block">
                   <span className="text-xs font-medium text-slate-700">雇用区分</span>
                   <select value={employmentType} onChange={event => setEmploymentType(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
-                    <option value="アルバイト">アルバイト</option>
-                    <option value="パート">パート</option>
-                    <option value="社員">社員</option>
+                    {EMPLOYMENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
                   </select>
                 </label>
                 <label className="block">
@@ -272,10 +319,8 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
                     <option value="共通">共通</option>
                   </select>
                 </label>
-                <label className="block">
-                  <span className="text-xs font-medium text-slate-700">勤務に関する補足メモ</span>
-                  <textarea value={memo} onChange={event => setMemo(event.target.value)} rows={3} placeholder="平日は18時以降のみ、日曜ランチ希望など" className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-slate-500" />
-                </label>
+                <AvailabilityRange label="出勤可能時間帯 1（基本）" description="普段出勤できる時間帯" start={workStart1} end={workEnd1} onStartChange={setWorkStart1} onEndChange={setWorkEnd1} />
+                <AvailabilityRange label="出勤可能時間帯 2（サブ）" description="他に誰もいなければ出てもよい時間帯" start={workStart2} end={workEnd2} onStartChange={setWorkStart2} onEndChange={setWorkEnd2} />
               </div>
               {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
               <div className="mt-5 flex justify-end">

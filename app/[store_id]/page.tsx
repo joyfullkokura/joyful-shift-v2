@@ -747,16 +747,16 @@ export default function HomePage() {
 
         <div className="overflow-x-auto">
           <div className="relative min-w-[980px]">
-            <div className="grid grid-cols-[170px_repeat(15,minmax(52px,1fr))] border-b border-slate-200 bg-slate-50">
-              <div className="border-r border-slate-200 px-4 py-3 text-xs font-medium text-slate-500">スタッフ</div>
+            <div className="grid grid-cols-[140px_repeat(15,minmax(44px,1fr))] border-b border-slate-200 bg-slate-50">
+              <div className="border-r border-slate-200 px-2 py-1.5 text-[10px] font-medium text-slate-500">スタッフ</div>
               {Array.from({ length: 15 }, (_, index) => {
                 const hour = index + 9
-                return <div key={hour} className="border-r border-slate-100 px-1 py-3 text-center text-[10px] font-semibold text-slate-500">{String(hour).padStart(2, '0')}:00</div>
+                return <div key={hour} className="border-r border-slate-100 px-1 py-1.5 text-center text-[10px] font-semibold text-slate-500">{String(hour).padStart(2, '0')}:00</div>
               })}
             </div>
 
             {currentNowPosition !== null && (
-              <div className="pointer-events-none absolute bottom-0 left-[170px] top-0 z-20" style={{ width: 'calc(100% - 170px)' }}>
+              <div className="pointer-events-none absolute bottom-0 left-[140px] top-0 z-20" style={{ width: 'calc(100% - 140px)' }}>
                 <div className="absolute bottom-0 top-0 w-0.5 bg-red-500" style={{ left: `${currentNowPosition * 100}%` }}>
                   <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded-sm bg-red-500 px-1.5 py-0.5 font-mono text-[11px] font-medium text-white shadow-sm">{currentTimeLabel}</span>
                 </div>
@@ -767,16 +767,16 @@ export default function HomePage() {
               <div className="px-5 py-12 text-center text-sm text-slate-500">本日の出勤予定者はいません</div>
             ) : scheduledPeople.map(({ person, shift, position }) => {
               return (
-                <div key={person.id} className="grid min-h-16 grid-cols-[170px_minmax(0,1fr)] border-b border-slate-100 last:border-0">
-                  <div className="flex items-center gap-2 border-r border-slate-200 px-4 py-3">
-                    <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold ${person.id === currentStaff?.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{person.name.slice(0, 2)}</span>
+                <div key={person.id} className="grid min-h-10 grid-cols-[140px_minmax(0,1fr)] border-b border-slate-100 last:border-0">
+                  <div className="flex items-center gap-1.5 border-r border-slate-200 px-2 py-1">
+                    <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold ${person.id === currentStaff?.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{person.name.slice(0, 2)}</span>
                     <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-800">{person.name}</p><p className="truncate text-[10px] text-slate-500">{person.mainJob || '職種未登録'}</p></div>
                   </div>
                   <div className="relative grid min-w-0" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr))' }}>
                     {Array.from({ length: 15 }, (_, index) => <div key={index} className="border-r border-slate-100" />)}
                     {position && (
                       <div
-                        className={`absolute top-1/2 z-10 flex h-8 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md px-2 text-[10px] shadow-sm ${person.id === currentStaff?.id || person.name === currentStaff?.name ? 'bg-orange-500 font-semibold text-white shadow-orange-200' : 'bg-slate-900 font-bold text-white'}`}
+                        className={`absolute top-1/2 z-10 flex h-5 -translate-y-1/2 items-center justify-center overflow-hidden rounded-sm px-1 text-[9px] shadow-sm ${person.id === currentStaff?.id || person.name === currentStaff?.name ? 'bg-orange-500 font-medium text-white shadow-orange-200' : 'bg-slate-900 font-medium text-white'}`}
                         style={{
                           left: `${position.startPosition * 100}%`,
                           width: `${(position.endPosition - position.startPosition) * 100}%`,
