@@ -60,7 +60,11 @@ async function hashPin(pin: string): Promise<string> {
 export default function PinLoginModal({ staff, storeId, mode: requestedMode, onClose, onSuccess }: PinLoginModalProps) {
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
-  const [stage, setStage] = useState<PinStage>(() => requestedMode === 'change' ? 'current' : 'pin')
+  const [stage, setStage] = useState<PinStage>(() => requestedMode === 'change'
+    ? 'current'
+    : requestedMode === 'setup' || (!requestedMode && !staff.pin_hash)
+      ? 'profile'
+      : 'pin')
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
@@ -76,10 +80,14 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const resetPin = useCallback(() => {
     setPin('')
     setConfirmPin('')
-    setStage(requestedMode === 'change' ? 'current' : 'pin')
+    setStage(requestedMode === 'change'
+      ? 'current'
+      : requestedMode === 'setup' || (!requestedMode && !staff.pin_hash)
+        ? 'profile'
+        : 'pin')
     setError('')
     setIsProcessing(false)
-  }, [requestedMode])
+  }, [requestedMode, staff.pin_hash])
 
   const submitCurrent = useCallback(async () => {
     const value = stage === 'confirm' ? confirmPin : pin
@@ -149,6 +157,14 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
   const completeInitialSetup = useCallback(async () => {
     if (isProcessing) return
+    if (!/^\d{4,8}$/.test(pin)) {
+      setError(`${MIN_PIN_LENGTH}〜${MAX_PIN_LENGTH}桁の暗証番号を入力してください。`)
+      return
+    }
+    if (pin !== confirmPin) {
+      setError('暗証番号が一致しません。もう一度入力してください。')
+      return
+    }
     const hasIncompletePrimaryRange = Boolean(workStart1) !== Boolean(workEnd1)
     const hasIncompleteSecondaryRange = Boolean(workStart2) !== Boolean(workEnd2)
     if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
@@ -184,7 +200,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
     }
-  }, [employmentType, isProcessing, mainJob, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
+  }, [confirmPin, employmentType, isProcessing, mainJob, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -299,6 +315,14 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
             <div>
               <p className="text-sm text-slate-600">シフト作成の基準となる希望条件を教えてください（後から変更可能）</p>
               <div className="mt-5 space-y-4">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">暗証番号</span>
+                  <input value={pin} onChange={event => { setPin(event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH)); setError('') }} type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]*" maxLength={MAX_PIN_LENGTH} placeholder="4〜8桁の数字" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">暗証番号（確認）</span>
+                  <input value={confirmPin} onChange={event => { setConfirmPin(event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH)); setError('') }} type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]*" maxLength={MAX_PIN_LENGTH} placeholder="もう一度入力" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" />
+                </label>
                 <label className="block">
                   <span className="text-xs font-medium text-slate-700">週の希望勤務日数</span>
                   <select value={targetWorkDays} onChange={event => setTargetWorkDays(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
