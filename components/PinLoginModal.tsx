@@ -19,7 +19,10 @@ type PinLoginModalProps = {
 const MIN_PIN_LENGTH = 4
 const MAX_PIN_LENGTH = 8
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
-const EMPLOYMENT_TYPES = ['学生アルバイト', 'パート', 'フリーター', '契約社員', '社員']
+const EMPLOYMENT_TYPES = [
+  { value: 'part_time', label: 'アルバイト・パート' },
+  { value: 'employee', label: '社員' },
+]
 const TIME_OPTIONS = Array.from({ length: 31 }, (_, index) => {
   const totalMinutes = 9 * 60 + index * 30
   const hours = Math.floor(totalMinutes / 60)
@@ -27,17 +30,18 @@ const TIME_OPTIONS = Array.from({ length: 31 }, (_, index) => {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 })
 
-function AvailabilityRange({ label, description, start, end, onStartChange, onEndChange }: {
+function AvailabilityRange({ label, description, required = false, start, end, onStartChange, onEndChange }: {
   label: string
   description: string
+  required?: boolean
   start: string
   end: string
   onStartChange: (value: string) => void
   onEndChange: (value: string) => void
 }) {
   return <fieldset className="rounded-md border border-slate-200 p-3">
-    <legend className="px-1 text-xs font-medium text-slate-700">{label}</legend>
-    <p className="-mt-1 text-[11px] text-slate-500">{description}（任意）</p>
+    <legend className="px-1 text-xs font-medium text-slate-700">{label}{required && <span className="ml-1 text-rose-600">（必須）</span>}</legend>
+    <p className="-mt-1 text-[11px] text-slate-500">{description}{!required && '（任意）'}</p>
     <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
       <select aria-label={`${label}の開始時刻`} value={start} onChange={event => onStartChange(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
         <option value="">開始</option>
@@ -69,7 +73,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
   const [targetWorkDays, setTargetWorkDays] = useState('3')
-  const [employmentType, setEmploymentType] = useState(staff.is_employee ? '社員' : '学生アルバイト')
+  const [employmentType, setEmploymentType] = useState(staff.is_employee ? 'employee' : 'part_time')
   const [mainJob, setMainJob] = useState('ホール')
   const [workStart1, setWorkStart1] = useState('')
   const [workEnd1, setWorkEnd1] = useState('')
@@ -165,6 +169,10 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError('暗証番号が一致しません。もう一度入力してください。')
       return
     }
+    if (!workStart1 || !workEnd1) {
+      setError('出勤可能時間帯 1（基本）の開始時刻と終了時刻を選択してください。')
+      return
+    }
     const hasIncompletePrimaryRange = Boolean(workStart1) !== Boolean(workEnd1)
     const hasIncompleteSecondaryRange = Boolean(workStart2) !== Boolean(workEnd2)
     if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
@@ -185,8 +193,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           pin_hash: pinHash,
           weekly_target_days: Number(targetWorkDays),
           main_job: mainJob,
-          employment_type: employmentType,
-          is_employee: employmentType === '社員',
+          is_employee: employmentType === 'employee',
           work_start_1: workStart1 || null,
           work_end_1: workEnd1 || null,
           work_start_2: workStart2 || null,
@@ -195,7 +202,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         .eq('id', staff.id)
         .eq('store_id', storeId)
       if (updateError) throw updateError
-      onSuccess({ ...staff, pin_hash: pinHash, is_employee: employmentType === '社員' })
+      onSuccess({ ...staff, pin_hash: pinHash, is_employee: employmentType === 'employee' })
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
@@ -316,34 +323,34 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
               <p className="text-sm text-slate-600">シフト作成の基準となる希望条件を教えてください（後から変更可能）</p>
               <div className="mt-5 space-y-4">
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">暗証番号</span>
+                  <span className="text-xs font-medium text-slate-700">暗証番号 <span className="text-rose-600">（必須）</span></span>
                   <input value={pin} onChange={event => { setPin(event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH)); setError('') }} type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]*" maxLength={MAX_PIN_LENGTH} placeholder="4〜8桁の数字" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" />
                 </label>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">暗証番号（確認）</span>
+                  <span className="text-xs font-medium text-slate-700">暗証番号（確認） <span className="text-rose-600">（必須）</span></span>
                   <input value={confirmPin} onChange={event => { setConfirmPin(event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH)); setError('') }} type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]*" maxLength={MAX_PIN_LENGTH} placeholder="もう一度入力" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" />
                 </label>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">週の希望勤務日数</span>
+                  <span className="text-xs font-medium text-slate-700">週の希望勤務日数 <span className="text-rose-600">（必須）</span></span>
                   <select value={targetWorkDays} onChange={event => setTargetWorkDays(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
                     {[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}
                   </select>
                 </label>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">雇用区分</span>
+                  <span className="text-xs font-medium text-slate-700">雇用区分 <span className="text-rose-600">（必須）</span></span>
                   <select value={employmentType} onChange={event => setEmploymentType(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
-                    {EMPLOYMENT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                    {EMPLOYMENT_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
                   </select>
                 </label>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">メイン職種</span>
+                  <span className="text-xs font-medium text-slate-700">メイン職種 <span className="text-rose-600">（必須）</span></span>
                   <select value={mainJob} onChange={event => setMainJob(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">
                     <option value="ホール">ホール</option>
                     <option value="キッチン">キッチン</option>
                     <option value="共通">共通</option>
                   </select>
                 </label>
-                <AvailabilityRange label="出勤可能時間帯 1（基本）" description="普段出勤できる時間帯" start={workStart1} end={workEnd1} onStartChange={setWorkStart1} onEndChange={setWorkEnd1} />
+                <AvailabilityRange label="出勤可能時間帯 1（基本）" description="普段出勤できる時間帯" required start={workStart1} end={workEnd1} onStartChange={setWorkStart1} onEndChange={setWorkEnd1} />
                 <AvailabilityRange label="出勤可能時間帯 2（サブ）" description="他に誰もいなければ出てもよい時間帯" start={workStart2} end={workEnd2} onStartChange={setWorkStart2} onEndChange={setWorkEnd2} />
               </div>
               {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
