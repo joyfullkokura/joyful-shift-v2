@@ -6,6 +6,13 @@ export type CurrentStaff = {
   name: string
   is_employee: boolean
   pin_hash?: string | null
+  weekly_target_days?: number | null
+  main_job?: string | null
+  work_start_1?: string | null
+  work_end_1?: string | null
+  work_start_2?: string | null
+  work_end_2?: string | null
+  memo?: string | null
   expiresAt?: string
 }
 

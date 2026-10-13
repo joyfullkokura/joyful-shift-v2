@@ -13,7 +13,17 @@ type NewStaffRequestDetails = {
   employment_type: string
   main_job: string
   weekly_target_days: number
+  work_start_1: string | null
+  work_end_1: string | null
+  work_start_2: string | null
+  work_end_2: string | null
+  memo: string
 }
+
+const TIME_OPTIONS = Array.from({ length: 61 }, (_, index) => {
+  const totalMinutes = 9 * 60 + index * 15
+  return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`
+})
 
 const hashPin = async (pin: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
@@ -34,10 +44,16 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
   const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false)
   const [isRegistrationModalOpen, setIsRegistrationModalOpen] = useState(false)
   const [newStaffName, setNewStaffName] = useState('')
-  const [newStaffEmploymentType, setNewStaffEmploymentType] = useState('アルバイト')
+  const [newStaffEmploymentType, setNewStaffEmploymentType] = useState('アルバイト・パート')
   const [newStaffMainJob, setNewStaffMainJob] = useState('ホール')
   const [newStaffWorkDays, setNewStaffWorkDays] = useState('3')
   const [newStaffPin, setNewStaffPin] = useState('')
+  const [newStaffPinConfirmation, setNewStaffPinConfirmation] = useState('')
+  const [newStaffWorkStart1, setNewStaffWorkStart1] = useState('')
+  const [newStaffWorkEnd1, setNewStaffWorkEnd1] = useState('')
+  const [newStaffWorkStart2, setNewStaffWorkStart2] = useState('')
+  const [newStaffWorkEnd2, setNewStaffWorkEnd2] = useState('')
+  const [newStaffMemo, setNewStaffMemo] = useState('')
   const [registrationError, setRegistrationError] = useState('')
   const [registrationMessage, setRegistrationMessage] = useState('')
   const [isSubmittingRegistration, setIsSubmittingRegistration] = useState(false)
@@ -48,7 +64,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
       if (!storeId) return
       const [storeResult, staffResult, pendingNewStaffResult] = await Promise.all([
         supabase.from('stores').select('name').eq('store_id', storeId).maybeSingle(),
-        supabase.from('staff').select('id, name, is_employee, pin_hash').eq('store_id', storeId).order('name'),
+        supabase.from('staff').select('id, name, is_employee, pin_hash, weekly_target_days, main_job, work_start_1, work_end_1, work_start_2, work_end_2, memo').eq('store_id', storeId).order('name'),
         supabase.from('staff_requests').select('staff_id').eq('store_id', storeId).eq('type', 'new_staff').eq('status', 'pending'),
       ])
       if (!isCurrent) return
@@ -61,6 +77,13 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           name: String(staff.name),
           is_employee: Boolean(staff.is_employee),
           pin_hash: typeof staff.pin_hash === 'string' ? staff.pin_hash : null,
+          weekly_target_days: typeof staff.weekly_target_days === 'number' ? staff.weekly_target_days : null,
+          main_job: typeof staff.main_job === 'string' ? staff.main_job : null,
+          work_start_1: typeof staff.work_start_1 === 'string' ? staff.work_start_1 : null,
+          work_end_1: typeof staff.work_end_1 === 'string' ? staff.work_end_1 : null,
+          work_start_2: typeof staff.work_start_2 === 'string' ? staff.work_start_2 : null,
+          work_end_2: typeof staff.work_end_2 === 'string' ? staff.work_end_2 : null,
+          memo: typeof staff.memo === 'string' ? staff.memo : null,
         })).filter(staff => !pendingStaffIds.has(staff.id)).sort((left, right) =>
           Number(right.is_employee) - Number(left.is_employee) || left.name.localeCompare(right.name, 'ja')
         ))
@@ -127,6 +150,20 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
       setRegistrationError('暗証番号は4〜8桁の数字で入力してください。')
       return
     }
+    if (newStaffPin !== newStaffPinConfirmation) {
+      setRegistrationError('暗証番号が一致しません。もう一度入力してください。')
+      return
+    }
+    const hasIncompletePrimaryRange = Boolean(newStaffWorkStart1) !== Boolean(newStaffWorkEnd1)
+    const hasIncompleteSecondaryRange = Boolean(newStaffWorkStart2) !== Boolean(newStaffWorkEnd2)
+    if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
+      setRegistrationError('出勤可能時間帯は、開始時刻と終了時刻をセットで選択してください。')
+      return
+    }
+    if ((newStaffWorkStart1 && newStaffWorkStart1 >= newStaffWorkEnd1) || (newStaffWorkStart2 && newStaffWorkStart2 >= newStaffWorkEnd2)) {
+      setRegistrationError('終了時刻は開始時刻より後の時刻を選択してください。')
+      return
+    }
     setIsSubmittingRegistration(true)
     setRegistrationError('')
     try {
@@ -140,6 +177,11 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           is_employee: false,
           main_job: newStaffMainJob,
           weekly_target_days: Number(newStaffWorkDays),
+          work_start_1: newStaffWorkStart1 || null,
+          work_end_1: newStaffWorkEnd1 || null,
+          work_start_2: newStaffWorkStart2 || null,
+          work_end_2: newStaffWorkEnd2 || null,
+          memo: newStaffMemo.trim(),
         })
         .select('id')
         .single()
@@ -149,6 +191,11 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
         employment_type: newStaffEmploymentType,
         main_job: newStaffMainJob,
         weekly_target_days: Number(newStaffWorkDays),
+        work_start_1: newStaffWorkStart1 || null,
+        work_end_1: newStaffWorkEnd1 || null,
+        work_start_2: newStaffWorkStart2 || null,
+        work_end_2: newStaffWorkEnd2 || null,
+        memo: newStaffMemo.trim(),
       }
       const { error: requestError } = await supabase
         .from('staff_requests')
@@ -166,6 +213,12 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
       setRegistrationMessage('店長へ登録申請を送信しました。承認後にログインが可能になります。')
       setNewStaffName('')
       setNewStaffPin('')
+      setNewStaffPinConfirmation('')
+      setNewStaffWorkStart1('')
+      setNewStaffWorkEnd1('')
+      setNewStaffWorkStart2('')
+      setNewStaffWorkEnd2('')
+      setNewStaffMemo('')
       window.dispatchEvent(new Event('staff-request-updated'))
     } catch (caughtError) {
       setRegistrationError(caughtError instanceof Error ? caughtError.message : '登録申請を送信できませんでした。')
@@ -214,6 +267,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           </div>
           {selectedStaff && (
             <PinLoginModal
+              key={`${selectedStaff.id}:${selectedStaff.pin_hash ?? 'setup'}`}
               staff={selectedStaff}
               storeId={storeId}
               onClose={() => setSelectedStaff(null)}
@@ -225,22 +279,26 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
           )}
           {isRegistrationModalOpen && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setIsRegistrationModalOpen(false) }}>
-              <section role="dialog" aria-modal="true" aria-labelledby="new-staff-registration-title" className="w-full max-w-md rounded-md border border-slate-200 bg-white shadow-2xl">
-                <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <section role="dialog" aria-modal="true" aria-labelledby="new-staff-registration-title" className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-2xl">
+                <div className="shrink-0 flex items-start justify-between border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                   <div><h2 id="new-staff-registration-title" className="text-sm font-semibold text-slate-800">新規スタッフ登録</h2><p className="mt-1 text-xs text-slate-500">店長の承認後にログインできるようになります。</p></div>
                   <button type="button" onClick={() => setIsRegistrationModalOpen(false)} className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-100" aria-label="閉じる"><X size={18} /></button>
                 </div>
                 {registrationMessage ? (
                   <div className="p-5"><p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-700">{registrationMessage}</p><div className="mt-5 flex justify-end"><button type="button" onClick={() => setIsRegistrationModalOpen(false)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">閉じる</button></div></div>
                 ) : (
-                  <div className="space-y-4 p-5">
-                    <label className="block"><span className="text-xs font-medium text-slate-700">お名前 <span className="text-rose-600">（必須）</span></span><input value={newStaffName} onChange={event => setNewStaffName(event.target.value)} autoComplete="name" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" /></label>
-                    <label className="block"><span className="text-xs font-medium text-slate-700">雇用区分 <span className="text-rose-600">（必須）</span></span><select value={newStaffEmploymentType} onChange={event => setNewStaffEmploymentType(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="アルバイト">アルバイト</option><option value="パート">パート</option><option value="社員">社員</option></select><span className="mt-1 block text-xs text-slate-500">社員を選んだ場合も、店長の承認まではスタッフ権限で登録されます。</span></label>
-                    <label className="block"><span className="text-xs font-medium text-slate-700">メイン職種 <span className="text-rose-600">（必須）</span></span><select value={newStaffMainJob} onChange={event => setNewStaffMainJob(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="ホール">ホール</option><option value="キッチン">キッチン</option><option value="共通">共通</option></select></label>
-                    <label className="block"><span className="text-xs font-medium text-slate-700">週の希望勤務日数 <span className="text-rose-600">（必須）</span></span><select value={newStaffWorkDays} onChange={event => setNewStaffWorkDays(event.target.value)} className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">{[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}</select></label>
-                    <label className="block"><span className="text-xs font-medium text-slate-700">暗証番号 <span className="text-rose-600">（必須）</span></span><input type="password" inputMode="numeric" pattern="[0-9]*" value={newStaffPin} onChange={event => setNewStaffPin(event.target.value.replace(/\D/g, '').slice(0, 8))} autoComplete="new-password" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" /><span className="mt-1 block text-xs text-slate-500">4〜8桁の数字</span></label>
+                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-5">
+                    <label className="block"><span className="text-xs font-medium text-slate-700">お名前 <span className="text-rose-600">（必須）</span></span><input value={newStaffName} onChange={event => setNewStaffName(event.target.value)} autoComplete="name" className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" /></label>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">暗証番号 <span className="text-rose-600">（必須）</span></span><input type="password" inputMode="numeric" pattern="[0-9]*" value={newStaffPin} onChange={event => { setNewStaffPin(event.target.value.replace(/\D/g, '').slice(0, 8)); setRegistrationError('') }} autoComplete="new-password" placeholder="4〜8桁の数字" className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" /></label>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">暗証番号（確認） <span className="text-rose-600">（必須）</span></span><input type="password" inputMode="numeric" pattern="[0-9]*" value={newStaffPinConfirmation} onChange={event => { setNewStaffPinConfirmation(event.target.value.replace(/\D/g, '').slice(0, 8)); setRegistrationError('') }} autoComplete="new-password" placeholder="もう一度入力" className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" /></label>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">週の希望勤務日数 <span className="text-rose-600">（必須）</span></span><select value={newStaffWorkDays} onChange={event => setNewStaffWorkDays(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">{[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}</select></label>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">雇用区分 <span className="text-rose-600">（必須）</span></span><select value={newStaffEmploymentType} onChange={event => setNewStaffEmploymentType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="アルバイト・パート">アルバイト・パート</option><option value="社員">社員</option></select><span className="mt-1 block text-[11px] text-slate-500">社員を選んだ場合も、店長の承認まではスタッフ権限で登録されます。</span></label>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">メイン職種 <span className="text-rose-600">（必須）</span></span><select value={newStaffMainJob} onChange={event => setNewStaffMainJob(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="ホール">ホール</option><option value="キッチン">キッチン</option><option value="共通">共通</option></select></label>
+                    <fieldset className="rounded-md border border-slate-200 p-3"><legend className="px-1 text-xs font-medium text-slate-700">出勤可能時間帯 1（基本）</legend><p className="-mt-1 text-[11px] text-slate-500">普段出勤できる時間帯（任意）</p><div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2"><select aria-label="出勤可能時間帯 1の開始時刻" value={newStaffWorkStart1} onChange={event => setNewStaffWorkStart1(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">開始</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select><span className="text-xs text-slate-400">〜</span><select aria-label="出勤可能時間帯 1の終了時刻" value={newStaffWorkEnd1} onChange={event => setNewStaffWorkEnd1(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">終了</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select></div></fieldset>
+                    <fieldset className="rounded-md border border-slate-200 p-3"><legend className="px-1 text-xs font-medium text-slate-700">出勤可能時間帯 2（サブ）</legend><p className="-mt-1 text-[11px] text-slate-500">他に誰もいなければ出てもよい時間帯（任意）</p><div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2"><select aria-label="出勤可能時間帯 2の開始時刻" value={newStaffWorkStart2} onChange={event => setNewStaffWorkStart2(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">開始</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select><span className="text-xs text-slate-400">〜</span><select aria-label="出勤可能時間帯 2の終了時刻" value={newStaffWorkEnd2} onChange={event => setNewStaffWorkEnd2(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">終了</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select></div></fieldset>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">勤務に関する補足メモ（任意）</span><textarea value={newStaffMemo} onChange={event => setNewStaffMemo(event.target.value)} rows={3} placeholder="例: 火曜日は授業のため18時以降のみ可能です。土日は何時でも出勤できます。" className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" /></label>
                     {registrationError && <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{registrationError}</p>}
-                    <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsRegistrationModalOpen(false)} disabled={isSubmittingRegistration} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button><button type="button" onClick={() => void submitNewStaffRegistration()} disabled={isSubmittingRegistration} className="rounded-md bg-slate-800 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を申請する</button></div>
+                    <div className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-slate-200 bg-white px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5"><button type="button" onClick={() => setIsRegistrationModalOpen(false)} disabled={isSubmittingRegistration} className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button><button type="button" onClick={() => void submitNewStaffRegistration()} disabled={isSubmittingRegistration} className="flex-[1.4] rounded-md bg-slate-800 px-3 py-2.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を申請する</button></div>
                   </div>
                 )}
               </section>

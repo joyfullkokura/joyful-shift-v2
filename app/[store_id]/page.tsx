@@ -79,6 +79,11 @@ type NewStaffRegistrationDetails = {
   employment_type: string
   main_job: string
   weekly_target_days: number
+  work_start_1: string | null
+  work_end_1: string | null
+  work_start_2: string | null
+  work_end_2: string | null
+  memo: string
 }
 
 type StaffRequestRecord = {
@@ -169,12 +174,23 @@ const getConditionChangeDetails = (value: unknown): ConditionChangeDetails | nul
 const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistrationDetails | null => {
   if (!value || typeof value !== 'object') return null
   const details = value as Partial<NewStaffRegistrationDetails>
-  return typeof details.name === 'string' &&
+  if (!(typeof details.name === 'string' &&
     typeof details.employment_type === 'string' &&
     typeof details.main_job === 'string' &&
-    typeof details.weekly_target_days === 'number'
-    ? details as NewStaffRegistrationDetails
-    : null
+    typeof details.weekly_target_days === 'number')) return null
+
+  const nullableTime = (candidate: unknown) => typeof candidate === 'string' || candidate === null || candidate === undefined
+  if (!(nullableTime(details.work_start_1) && nullableTime(details.work_end_1) &&
+    nullableTime(details.work_start_2) && nullableTime(details.work_end_2))) return null
+
+  return {
+    ...details,
+    work_start_1: details.work_start_1 ?? null,
+    work_end_1: details.work_end_1 ?? null,
+    work_start_2: details.work_start_2 ?? null,
+    work_end_2: details.work_end_2 ?? null,
+    memo: typeof details.memo === 'string' ? details.memo : '',
+  } as NewStaffRegistrationDetails
 }
 
 export default function HomePage() {
@@ -516,6 +532,21 @@ export default function HomePage() {
     setError('')
     try {
       if (approved) {
+        const { error: staffUpdateError } = await supabase
+          .from('staff')
+          .update({
+            is_employee: details.employment_type === '社員',
+            main_job: details.main_job,
+            weekly_target_days: details.weekly_target_days,
+            work_start_1: details.work_start_1,
+            work_end_1: details.work_end_1,
+            work_start_2: details.work_start_2,
+            work_end_2: details.work_end_2,
+            memo: details.memo,
+          })
+          .eq('id', request.staff_id)
+          .eq('store_id', storeId)
+        if (staffUpdateError) throw staffUpdateError
         const { error: updateError } = await supabase
           .from('staff_requests')
           .update({ status: 'approved', resolved_at: new Date().toISOString() })

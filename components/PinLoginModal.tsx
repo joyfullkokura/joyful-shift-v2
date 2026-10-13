@@ -23,12 +23,26 @@ const EMPLOYMENT_TYPES = [
   { value: 'part_time', label: 'アルバイト・パート' },
   { value: 'employee', label: '社員' },
 ]
-const TIME_OPTIONS = Array.from({ length: 31 }, (_, index) => {
-  const totalMinutes = 9 * 60 + index * 30
+const TIME_OPTIONS = Array.from({ length: 61 }, (_, index) => {
+  const totalMinutes = 9 * 60 + index * 15
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 })
+const JOB_OPTIONS = ['ホール', 'キッチン', '共通']
+
+function getTargetWorkDays(value: number | null | undefined) {
+  return typeof value === 'number' && value >= 1 && value <= 6 ? String(value) : '3'
+}
+
+function getMainJob(value: string | null | undefined) {
+  return value && JOB_OPTIONS.includes(value) ? value : 'ホール'
+}
+
+function getTimeValue(value: string | null | undefined) {
+  const time = value?.slice(0, 5) ?? ''
+  return TIME_OPTIONS.includes(time) ? time : ''
+}
 
 function AvailabilityRange({ label, description, required = false, start, end, onStartChange, onEndChange }: {
   label: string
@@ -72,13 +86,14 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
-  const [targetWorkDays, setTargetWorkDays] = useState('3')
+  const [targetWorkDays, setTargetWorkDays] = useState(() => getTargetWorkDays(staff.weekly_target_days))
   const [employmentType, setEmploymentType] = useState(staff.is_employee ? 'employee' : 'part_time')
-  const [mainJob, setMainJob] = useState('ホール')
-  const [workStart1, setWorkStart1] = useState('')
-  const [workEnd1, setWorkEnd1] = useState('')
-  const [workStart2, setWorkStart2] = useState('')
-  const [workEnd2, setWorkEnd2] = useState('')
+  const [mainJob, setMainJob] = useState(() => getMainJob(staff.main_job))
+  const [workStart1, setWorkStart1] = useState(() => getTimeValue(staff.work_start_1))
+  const [workEnd1, setWorkEnd1] = useState(() => getTimeValue(staff.work_end_1))
+  const [workStart2, setWorkStart2] = useState(() => getTimeValue(staff.work_start_2))
+  const [workEnd2, setWorkEnd2] = useState(() => getTimeValue(staff.work_end_2))
+  const [memo, setMemo] = useState(() => staff.memo ?? '')
   const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
 
   const resetPin = useCallback(() => {
@@ -198,6 +213,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           work_end_1: workEnd1 || null,
           work_start_2: workStart2 || null,
           work_end_2: workEnd2 || null,
+          memo: memo.trim(),
         })
         .eq('id', staff.id)
         .eq('store_id', storeId)
@@ -207,7 +223,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
     }
-  }, [confirmPin, employmentType, isProcessing, mainJob, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
+  }, [confirmPin, employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -306,8 +322,8 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="pin-login-title" className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+      <section role="dialog" aria-modal="true" aria-labelledby="pin-login-title" className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+        <div className="shrink-0 flex items-start justify-between border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white"><KeyRound size={18} /></div>
             <div>
@@ -317,11 +333,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           <button type="button" onClick={onClose} className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900" aria-label="閉じる"><X size={18} /></button>
         </div>
 
-        <div className="p-5">
-          {isProfileStep ? (
+        {isProfileStep ? (
+          <>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
             <div>
               <p className="text-sm text-slate-600">シフト作成の基準となる希望条件を教えてください（後から変更可能）</p>
-              <div className="mt-5 space-y-4">
+              <div className="mt-4 space-y-3">
                 <label className="block">
                   <span className="text-xs font-medium text-slate-700">暗証番号 <span className="text-rose-600">（必須）</span></span>
                   <input value={pin} onChange={event => { setPin(event.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH)); setError('') }} type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]*" maxLength={MAX_PIN_LENGTH} placeholder="4〜8桁の数字" className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500" />
@@ -352,13 +369,19 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
                 </label>
                 <AvailabilityRange label="出勤可能時間帯 1（基本）" description="普段出勤できる時間帯" required start={workStart1} end={workEnd1} onStartChange={setWorkStart1} onEndChange={setWorkEnd1} />
                 <AvailabilityRange label="出勤可能時間帯 2（サブ）" description="他に誰もいなければ出てもよい時間帯" start={workStart2} end={workEnd2} onStartChange={setWorkStart2} onEndChange={setWorkEnd2} />
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-700">勤務に関する補足メモ（任意）</span>
+                  <textarea value={memo} onChange={event => setMemo(event.target.value)} rows={3} placeholder="例: 火曜日は授業のため18時以降のみ可能です。土日は何時でも出勤できます。" className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" />
+                </label>
               </div>
               {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
-              <div className="mt-5 flex justify-end">
-                <button type="button" onClick={() => void completeInitialSetup()} disabled={isProcessing} className="rounded-md bg-slate-800 px-4 py-2.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を完了してはじめる</button>
-              </div>
             </div>
-          ) : <>
+            </div>
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-5">
+              <button type="button" onClick={() => void completeInitialSetup()} disabled={isProcessing} className="w-full rounded-md bg-slate-800 px-4 py-2.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を完了してはじめる</button>
+            </div>
+          </>
+        ) : <div className="p-5">
           <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-4 text-center">
             <p className="text-sm font-semibold text-slate-900">{staff.name}さん</p>
             <p className="mt-1 text-xs text-slate-500">{mode === 'setup' ? '初回設定です。4〜8桁の暗証番号を設定してください。' : mode === 'change' ? '現在の暗証番号を確認してから新しい暗証番号を設定してください。' : '登録済みの暗証番号を入力してください。'}</p>
@@ -391,8 +414,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
             </button>
           )}
           <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}</div>
-          </>}
-        </div>
+          </div>}
       </section>
     </div>
   )
