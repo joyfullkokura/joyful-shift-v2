@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, KeyRound, LockKeyhole, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
 import type { CurrentStaff } from '@/context/AdminContext'
 
 type PinLoginMode = 'setup' | 'login' | 'change'
@@ -218,6 +219,15 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         .eq('id', staff.id)
         .eq('store_id', storeId)
       if (updateError) throw updateError
+      void analyzeAndSaveStaffConditions({
+        staffId: staff.id,
+        storeId,
+        work_start_1: workStart1 || null,
+        work_end_1: workEnd1 || null,
+        work_start_2: workStart2 || null,
+        work_end_2: workEnd2 || null,
+        memo: memo.trim(),
+      })
       onSuccess({ ...staff, pin_hash: pinHash, is_employee: employmentType === 'employee' })
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')

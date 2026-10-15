@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { parseSkillOptions } from '@/lib/skill-options'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 
@@ -411,9 +412,7 @@ export default function GeneratePage() {
     let assignedHours = 0
     const alerts: ScheduleAlert[] = []
     const consecutiveDays = new Map(staffList.map(staff => [staff.id, 0]))
-    const skillOptions = typeof storeInfo.skill_options === 'string'
-      ? storeInfo.skill_options.split(',').map((skill: string) => skill.trim()).filter(Boolean)
-      : []
+    const skillOptions = parseSkillOptions(storeInfo.skill_options)
     const hallSkills = skillOptions.filter((skill: string) => skill.startsWith('[H]'))
     const kitchenSkills = skillOptions.filter((skill: string) => skill.startsWith('[K]'))
     const assignmentsByDate = new Map<string, {

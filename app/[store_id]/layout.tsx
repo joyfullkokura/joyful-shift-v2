@@ -7,6 +7,7 @@ import { ArrowRight, CalendarDays, Eye, House, LogOut, Sparkles, Store, Users, C
 import { AdminProvider, CurrentStaff, useAdmin } from '@/context/AdminContext'
 import PinLoginModal from '@/components/PinLoginModal'
 import { supabase } from '@/lib/supabase'
+import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
 
 type NewStaffRequestDetails = {
   name: string
@@ -210,6 +211,15 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
         await supabase.from('staff').delete().eq('id', staff.id).eq('store_id', storeId)
         throw requestError
       }
+      void analyzeAndSaveStaffConditions({
+        staffId: staff.id,
+        storeId,
+        work_start_1: details.work_start_1,
+        work_end_1: details.work_end_1,
+        work_start_2: details.work_start_2,
+        work_end_2: details.work_end_2,
+        memo: details.memo,
+      })
       setRegistrationMessage('店長へ登録申請を送信しました。承認後にログインが可能になります。')
       setNewStaffName('')
       setNewStaffPin('')

@@ -18,6 +18,9 @@ import {
 import PinLoginModal from '@/components/PinLoginModal'
 import { useAdmin } from '@/context/AdminContext'
 import { supabase } from '@/lib/supabase'
+import { parseSkillOptions } from '@/lib/skill-options'
+import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
+import { formatParsedConditions } from '@/lib/parsed-conditions'
 
 type SchedulePerson = {
   id: string
@@ -38,6 +41,7 @@ type ScheduleData = {
 type StoreRecord = {
   name?: string | null
   notice?: string | null
+  skill_options?: unknown
 }
 
 type PinResetRequest = {
@@ -58,7 +62,10 @@ type StaffProfile = {
   skills?: string | null
   work_start_1?: string | null
   work_end_1?: string | null
+  work_start_2?: string | null
+  work_end_2?: string | null
   is_employee?: boolean | null
+  parsed_conditions?: unknown
 }
 
 type AvailableHours = {
@@ -96,8 +103,6 @@ type StaffRequestRecord = {
   created_at: string
   resolved_at?: string | null
 }
-
-const STANDARD_SKILL_OPTIONS = ['[H]レジ', '[H]デザート', '[K]グリル', '[K]サラダ', '[K]ディッシャー', '[K]仕込み']
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear()
@@ -211,6 +216,7 @@ export default function HomePage() {
   const [hasRequestedDayOff, setHasRequestedDayOff] = useState(false)
   const [error, setError] = useState('')
   const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([])
+  const [skillOptions, setSkillOptions] = useState<string[]>([])
   const [conditionRequests, setConditionRequests] = useState<StaffRequestRecord[]>([])
   const [newStaffRequests, setNewStaffRequests] = useState<StaffRequestRecord[]>([])
   const [isConditionModalOpen, setIsConditionModalOpen] = useState(false)
@@ -237,7 +243,7 @@ export default function HomePage() {
       setError('')
       try {
         const [storeResult, shiftResult, resetRequestResult, profilesResult, conditionRequestResult, newStaffRequestResult] = await Promise.all([
-          supabase.from('stores').select('name, notice').eq('store_id', storeId).maybeSingle(),
+          supabase.from('stores').select('name, notice, skill_options').eq('store_id', storeId).maybeSingle(),
           supabase
             .from('monthly_shifts')
             .select('schedule_data')
@@ -254,7 +260,7 @@ export default function HomePage() {
             .order('name'),
           supabase
             .from('staff')
-            .select('id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, is_employee')
+            .select('id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, work_start_2, work_end_2, is_employee, parsed_conditions')
             .eq('store_id', storeId)
             .order('name'),
           (isAdmin
@@ -291,6 +297,7 @@ export default function HomePage() {
         const parsedSchedule = latestShift?.schedule_data
         if (!isCurrent) return
         setStoreName(store?.name || storeId)
+        setSkillOptions(parseSkillOptions(store?.skill_options))
         setNotice(store?.notice || '現在の店内お知らせはありません。')
         setDraftNotice(store?.notice || '')
         setSchedule(isScheduleData(parsedSchedule) ? parsedSchedule : null)
@@ -314,7 +321,8 @@ export default function HomePage() {
     if (!currentProfile) return
     setRequestedWorkDays(String(currentProfile.weekly_target_days || 3))
     setRequestedMainJob(currentProfile.main_job || 'ホール')
-    setRequestedSkills((currentProfile.skills || '').split(',').map(skill => skill.trim()).filter(Boolean))
+    setRequestedSkills(parseSkillOptions(currentProfile.skills)
+      .filter(skill => skillOptions.includes(skill)))
     setRequestedAvailableStart(currentProfile.work_start_1?.slice(0, 5) || '')
     setRequestedAvailableEnd(currentProfile.work_end_1?.slice(0, 5) || '')
     setRequestedMemo(currentProfile.memo || '')
@@ -488,6 +496,16 @@ export default function HomePage() {
           .eq('id', request.staff_id)
           .eq('store_id', storeId)
         if (staffUpdateError) throw staffUpdateError
+        const existingProfile = staffProfiles.find(profile => profile.id === request.staff_id)
+        void analyzeAndSaveStaffConditions({
+          staffId: request.staff_id,
+          storeId,
+          work_start_1: details.available_hours?.start || existingProfile?.work_start_1 || null,
+          work_end_1: details.available_hours?.end || existingProfile?.work_end_1 || null,
+          work_start_2: existingProfile?.work_start_2 || null,
+          work_end_2: existingProfile?.work_end_2 || null,
+          memo: details.memo,
+        })
         setStaffProfiles(current => current.map(profile => profile.id === request.staff_id
           ? {
             ...profile,
@@ -547,6 +565,15 @@ export default function HomePage() {
           .eq('id', request.staff_id)
           .eq('store_id', storeId)
         if (staffUpdateError) throw staffUpdateError
+        void analyzeAndSaveStaffConditions({
+          staffId: request.staff_id,
+          storeId,
+          work_start_1: details.work_start_1,
+          work_end_1: details.work_end_1,
+          work_start_2: details.work_start_2,
+          work_end_2: details.work_end_2,
+          memo: details.memo,
+        })
         const { error: updateError } = await supabase
           .from('staff_requests')
           .update({ status: 'approved', resolved_at: new Date().toISOString() })
@@ -594,7 +621,7 @@ export default function HomePage() {
   )
   const getRequestStaff = (staffId: string) => staffProfiles.find(profile => profile.id === staffId)
   const currentSkills = (currentProfile?.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
-  const requestedSkillOptions = Array.from(new Set([...STANDARD_SKILL_OPTIONS, ...requestedSkills]))
+  const parsedConditionsSummary = formatParsedConditions(currentProfile?.parsed_conditions)
   const toggleRequestedSkill = (skill: string) => {
     setRequestedSkills(current => current.includes(skill)
       ? current.filter(item => item !== skill)
@@ -842,6 +869,7 @@ export default function HomePage() {
                   <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">習得スキル</dt><dd className="mt-1 flex flex-wrap gap-1.5">{currentSkills.length > 0 ? currentSkills.map(skill => <span key={skill} className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{skill}</span>) : <span className="text-sm text-slate-600">登録なし</span>}</dd></div>
                   <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">基本出勤可能時間</dt><dd className="mt-0.5 font-medium text-slate-800">{currentProfile.work_start_1 && currentProfile.work_end_1 ? `${currentProfile.work_start_1.slice(0, 5)}〜${currentProfile.work_end_1.slice(0, 5)}` : '登録なし'}</dd></div>
                   <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">勤務に関する補足メモ</dt><dd className="mt-0.5 whitespace-pre-wrap text-slate-700">{currentProfile.memo || '登録されていません'}</dd></div>
+                  {parsedConditionsSummary && <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">🤖 AI解析済</dt><dd className="mt-1 rounded border border-sky-100 bg-sky-50 px-2 py-1 text-[11px] leading-5 text-sky-900">{parsedConditionsSummary}</dd></div>}
                 </dl>
               </div>
             </div>
@@ -864,12 +892,15 @@ export default function HomePage() {
                 <legend className="text-xs font-medium text-slate-700">習得スキル</legend>
                 <p className="mt-1 text-xs text-slate-500">できるようになったポジションを選択してください。</p>
                 <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {requestedSkillOptions.map(skill => (
+                  {skillOptions.map(skill => (
                     <label key={skill} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 transition hover:bg-slate-50">
                       <input type="checkbox" checked={requestedSkills.includes(skill)} onChange={() => toggleRequestedSkill(skill)} className="h-3.5 w-3.5 rounded border-slate-300 text-slate-800 focus:ring-slate-500" />
                       <span>{skill}</span>
                     </label>
                   ))}
+                  {skillOptions.length === 0 && (
+                    <p className="col-span-full text-xs text-slate-500">店舗にスキル項目が設定されていません。</p>
+                  )}
                 </div>
               </fieldset>
               <fieldset>

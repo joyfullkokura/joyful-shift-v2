@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { parseSkillOptions } from '@/lib/skill-options'
+import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
+import { formatParsedConditions } from '@/lib/parsed-conditions'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
 
@@ -38,9 +41,7 @@ export default function StaffPage() {
         .eq('store_id', storeId)
         .single()
       
-      if (storeData?.skill_options) {
-        setSkillOptions(storeData.skill_options.split(','))
-      }
+      setSkillOptions(parseSkillOptions(storeData?.skill_options))
     }
     fetchData()
   }, [storeId])
@@ -81,7 +82,7 @@ export default function StaffPage() {
   const handleToggleSkill = (personId: string, skillName: string) => {
     setStaff(prev => prev.map(p => {
       if (p.id !== personId) return p
-      let currentSkills = p.skills ? p.skills.split(',').filter((s: string) => s !== "") : []
+      let currentSkills = parseSkillOptions(p.skills)
       if (currentSkills.includes(skillName)) {
         currentSkills = currentSkills.filter((s: string) => s !== skillName)
       } else {
@@ -117,6 +118,15 @@ export default function StaffPage() {
     if (error) {
       alert('詳細の保存に失敗しました: ' + error.message)
     } else {
+      void analyzeAndSaveStaffConditions({
+        staffId: newStaff.id,
+        storeId,
+        work_start_1: newStaff.work_start_1 || null,
+        work_end_1: newStaff.work_end_1 || null,
+        work_start_2: newStaff.work_start_2 || null,
+        work_end_2: newStaff.work_end_2 || null,
+        memo: newStaff.memo || '',
+      })
       setNewStaffId(null)
     }
     setIsNewStaffSaving(false)
@@ -390,6 +400,7 @@ export default function StaffPage() {
 
           const slot1Suggestions = getWorkTimeSuggestions(person, 'slot1')
           const slot2Suggestions = getWorkTimeSuggestions(person, 'slot2')
+          const parsedConditionsSummary = formatParsedConditions(person.parsed_conditions)
 
           return (
             <div key={person.id} className="rounded-md border border-orange-200 bg-white p-3 shadow-sm md:p-4">
@@ -627,6 +638,7 @@ export default function StaffPage() {
                       )) || <span className="text-sm text-slate-400">未設定</span>}
                     </div>
                   )}
+                  {parsedConditionsSummary && <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-2 py-1 text-[10px] leading-4 text-sky-900">🤖 AI解析済: {parsedConditionsSummary}</p>}
                 </div>
               </div>
 
