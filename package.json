@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@google/genai": "^2.29.1",
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.111.0",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",

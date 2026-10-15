@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai'
+import { GoogleGenerativeAI, SchemaType, type ResponseSchema } from '@google/generative-ai'
 import {
   type ConditionAnalysisInput,
   parseParsedConditions,
@@ -23,18 +23,18 @@ const getInput = (value: unknown): ConditionAnalysisInput | null => {
   }
 }
 
-const daySchema = {
-  type: Type.OBJECT,
+const daySchema: ResponseSchema = {
+  type: SchemaType.OBJECT,
   properties: {
-    is_available: { type: Type.BOOLEAN },
-    start_time: { type: Type.STRING, nullable: true },
-    end_time: { type: Type.STRING, nullable: true },
+    is_available: { type: SchemaType.BOOLEAN },
+    start_time: { type: SchemaType.STRING, nullable: true },
+    end_time: { type: SchemaType.STRING, nullable: true },
   },
   required: ['is_available', 'start_time', 'end_time'],
 }
 
-const responseSchema = {
-  type: Type.OBJECT,
+const responseSchema: ResponseSchema = {
+  type: SchemaType.OBJECT,
   properties: {
     monday: daySchema,
     tuesday: daySchema,
@@ -48,28 +48,29 @@ const responseSchema = {
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) return Response.json({ error: 'Gemini API is not configured.' }, { status: 503 })
-
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY is not configured.')
+    }
     const input = getInput(await request.json())
     if (!input) return Response.json({ error: 'Invalid condition data.' }, { status: 400 })
 
-    const ai = new GoogleGenAI({ apiKey })
-    const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
-      contents: `あなたは飲食店のシフト管理者です。スタッフの「出勤可能時間」および「勤務に関する補足メモ」を解析し、月曜日〜日曜日ごとの出勤可能な時間帯を JSON 形式で出力してください。店舗の基本営業時間は 09:00〜24:00 です。出勤不可の曜日には is_available: false を設定してください。\n\n時刻は必ず HH:MM（24:00 は使用可）で、営業時間外は営業時間内に収めてください。曜日指定がない場合は、基本の出勤可能時間帯を全曜日に適用してください。補足メモの明示的な曜日指定を優先してください。基本時間が未設定で補足メモにも時間指定がない曜日は出勤不可にしてください。出勤不可の場合、start_time と end_time は null にしてください。\n\n対象スタッフのデータ:\n${JSON.stringify(input)}`,
-      config: {
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: {
         responseMimeType: 'application/json',
         responseSchema,
       },
     })
+    const result = await model.generateContent(`あなたは飲食店のシフト管理者です。スタッフの「出勤可能時間」および「勤務に関する補足メモ」を解析し、月曜日〜日曜日ごとの出勤可能な時間帯を JSON 形式で出力してください。店舗の基本営業時間は 09:00〜24:00 です。出勤不可の曜日には is_available: false を設定してください。\n\n時刻は必ず HH:MM（24:00 は使用可）で、営業時間外は営業時間内に収めてください。曜日指定がない場合は、基本の出勤可能時間帯を全曜日に適用してください。補足メモの明示的な曜日指定を優先してください。基本時間が未設定で補足メモにも時間指定がない曜日は出勤不可にしてください。出勤不可の場合、start_time と end_time は null にしてください。\n\n対象スタッフのデータ:\n${JSON.stringify(input)}`)
 
-    const parsed = parseParsedConditions(JSON.parse(response.text || 'null'))
+    const parsed = parseParsedConditions(JSON.parse(result.response.text() || 'null'))
     if (!parsed) throw new Error('Gemini returned an invalid condition schema.')
     return Response.json(parsed)
   } catch (error) {
-    console.error('Gemini condition parsing failed.', error)
-    return Response.json({ error: 'Failed to parse conditions.' }, { status: 502 })
+    console.error('Gemini API Error:', error)
+    const message = error instanceof Error ? error.message : String(error)
+    return Response.json({ error: `Gemini API Error: ${message}` }, { status: 500 })
   }
 }
