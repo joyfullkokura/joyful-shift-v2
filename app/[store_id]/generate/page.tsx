@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { parseSkillOptions } from '@/lib/skill-options'
+import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 
@@ -54,6 +55,7 @@ type GeneratedStaffShift = {
   shifts: Record<string, string>
   assignedDays: number
   assignedHours: number
+  weeklyTargetDays?: number
 }
 
 type GeneratedSchedule = {
@@ -86,11 +88,14 @@ type StaffRecord = {
 }
 
 type ShiftRequest = {
+  id?: string
   staff_id?: string | null
   date?: string | null
   is_off?: boolean | null
   start_time?: string | null
   end_time?: string | null
+  memo?: string | null
+  parsed_request?: unknown
 }
 
 type TimeRange = {
@@ -105,6 +110,18 @@ const toTimeRange = (startValue?: string | null, endValue?: string | null): Time
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null
   if (end < start) end += 24
   return end > start ? { start, end } : null
+}
+
+const isRequestUnavailable = (request?: ShiftRequest) =>
+  request?.is_off === true || parseParsedShiftRequest(request?.parsed_request)?.is_available === false
+
+const getRequestedRange = (request?: ShiftRequest) => {
+  const explicitRange = toTimeRange(request?.start_time, request?.end_time)
+  if (explicitRange) return explicitRange
+  const parsedRequest = parseParsedShiftRequest(request?.parsed_request)
+  return parsedRequest?.is_available
+    ? toTimeRange(parsedRequest.start_time, parsedRequest.end_time)
+    : null
 }
 
 const jobForGroup = (group: string): 'ホール' | 'キッチン' | null => {
@@ -169,6 +186,7 @@ export default function GeneratePage() {
   const [isDraftEdit, setIsDraftEdit] = useState(false)
   const [draftNotice, setDraftNotice] = useState('')
   const [draftError, setDraftError] = useState('')
+  const [requestAnalysisWarning, setRequestAnalysisWarning] = useState('')
   const [draftAction, setDraftAction] = useState<'save' | 'discard' | 'confirm' | null>(null)
   const [monthlyTargetHours, setMonthlyTargetHours] = useState<number>(168)
 
@@ -389,8 +407,43 @@ export default function GeneratePage() {
       .gte('date', startDate)
       .lt('date', endDate)
 
+    const requests = (requestData || []) as ShiftRequest[]
+    const staffNames = new Map(((staffData || []) as StaffRecord[]).map(staff => [staff.id, staff.name]))
+    const analysisWarnings: string[] = []
+    const pendingMemoRequests = requests.filter(request =>
+      Boolean(request.id && request.staff_id && request.date && request.memo?.trim())
+      && (request.parsed_request === null || request.parsed_request === undefined)
+    )
+
+    // Only notes without a cached result reach Gemini. Sequential calls avoid an avoidable rate-limit burst.
+    for (const request of pendingMemoRequests) {
+      try {
+        const response = await fetch('/api/parse-conditions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo }),
+        })
+        if (!response.ok) throw new Error(await response.text())
+        const parsedRequest = parseParsedShiftRequest(await response.json())
+        if (!parsedRequest) throw new Error('Invalid parsed request response.')
+        const { error } = await supabase
+          .from('shift_requests')
+          .update({ parsed_request: parsedRequest })
+          .eq('id', request.id)
+          .eq('store_id', store_id)
+        if (error) throw error
+        request.parsed_request = parsedRequest
+      } catch (error) {
+        console.error('日付要望のAI解析に失敗しました。', error)
+        const staffName = staffNames.get(request.staff_id || '') || 'スタッフ'
+        const day = Number(request.date?.slice(-2) || 0)
+        analysisWarnings.push(`⚠️ ${staffName}さんの${day || '対象'}日の要望解析に失敗したため、基本条件で生成しました。生成後に手動でご確認ください。`)
+      }
+    }
+    setRequestAnalysisWarning(analysisWarnings.join(' '))
+
     const requestMap: Record<string, ShiftRequest> = {}
-    ;((requestData || []) as ShiftRequest[]).forEach((row) => {
+    requests.forEach((row) => {
       if (row.staff_id && row.date) requestMap[`${row.staff_id}_${row.date}`] = row
     })
 
@@ -407,6 +460,7 @@ export default function GeneratePage() {
       shifts: {},
       assignedDays: 0,
       assignedHours: 0,
+      weeklyTargetDays: staff.weekly_target_days ?? undefined,
     }))
     let vacancyCount = 0
     let assignedHours = 0
@@ -432,7 +486,7 @@ export default function GeneratePage() {
       const dailyAssignments = new Set<string>()
 
       staffList.forEach((staff, index) => {
-        if (requestMap[`${staff.id}_${dateStr}`]?.is_off === true) {
+        if (isRequestUnavailable(requestMap[`${staff.id}_${dateStr}`])) {
           scheduleStaff[index].shifts[dateStr] = '×'
         }
       })
@@ -451,7 +505,7 @@ export default function GeneratePage() {
 
           staffList.forEach((staff, index) => {
             const request = requestMap[`${staff.id}_${dateStr}`]
-            if (request?.is_off === true || dailyAssignments.has(staff.id)) return
+            if (isRequestUnavailable(request) || dailyAssignments.has(staff.id)) return
 
             const possibleGroups = (staff.possible_groups || '').split(',').map(value => value.trim()).filter(Boolean)
             const groupJob = jobForGroup(group)
@@ -464,7 +518,7 @@ export default function GeneratePage() {
               ))
             if (!matchesJob) return
 
-            const requestedRange = toTimeRange(request?.start_time, request?.end_time)
+            const requestedRange = getRequestedRange(request)
             const workRange1 = toTimeRange(staff.work_start_1, staff.work_end_1)
             const workRange2 = toTimeRange(staff.work_start_2, staff.work_end_2)
             const hasStaffTimeRange = Boolean(requestedRange || workRange1 || workRange2)
@@ -548,7 +602,7 @@ export default function GeneratePage() {
     const employeeTarget = (staff: StaffRecord) => staff.monthly_target_hours ?? monthlyTargetHours
     const canWorkSlot = (staff: StaffRecord, dateStr: string, slot: { group: string; start: number; end: number }) => {
       const request = requestMap[`${staff.id}_${dateStr}`]
-      if (request?.is_off === true) return false
+      if (isRequestUnavailable(request)) return false
       const possibleGroups = (staff.possible_groups || '').split(',').map(value => value.trim()).filter(Boolean)
       const job = jobForGroup(slot.group)
       const matchesJob = staff.main_job === slot.group
@@ -560,7 +614,7 @@ export default function GeneratePage() {
         ))
       if (!matchesJob) return false
 
-      const requestedRange = toTimeRange(request?.start_time, request?.end_time)
+      const requestedRange = getRequestedRange(request)
       const workRanges = [
         toTimeRange(staff.work_start_1, staff.work_end_1),
         toTimeRange(staff.work_start_2, staff.work_end_2),
@@ -676,7 +730,8 @@ export default function GeneratePage() {
             const slot = dayData.slots.find(item => item.staffId === employee.id)
             if (!slot) continue
             const request = requestMap[`${employee.id}_${dateStr}`]
-            const requestedRange = toTimeRange(request?.start_time, request?.end_time)
+            if (isRequestUnavailable(request)) continue
+            const requestedRange = getRequestedRange(request)
             const workRanges = [
               toTimeRange(employee.work_start_1, employee.work_end_1),
               toTimeRange(employee.work_start_2, employee.work_end_2),
@@ -777,6 +832,7 @@ export default function GeneratePage() {
 
   const handleGenerate = async () => {
     setIsGenerating(true)
+    setRequestAnalysisWarning('')
     try {
       await buildGeneratedSchedule()
     } finally {
@@ -896,21 +952,28 @@ export default function GeneratePage() {
     const editDates = Array.from({ length: daysInMonth }, (_, index) =>
       `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`
     )
+    const dailyHours = Object.fromEntries(editDates.map(date => [date,
+      generatedSchedule.staff.reduce((total, staff) => total + shiftHoursFromLabel(staff.shifts[date] || ''), 0),
+    ])) as Record<string, number>
+    const presets = Array.from(new Set([
+      ...Object.values(slots).flatMap(daySlots => Object.values(daySlots).map(slot => `${fToT(slot.start)}-${fToT(slot.end)}`)),
+      ...generatedSchedule.staff.flatMap(staff => Object.values(staff.shifts).filter(shift => shiftHoursFromLabel(shift) > 0)),
+    ])).slice(0, 8)
     return (
-      <div className="mx-auto max-w-[1440px] p-4 pb-60 md:p-8 md:pb-10">
-        <header className="sticky top-0 z-30 mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white/95 py-4 backdrop-blur-sm">
-          <div>
+      <div className="mx-auto w-full max-w-[1600px] overflow-x-hidden p-4 pb-60 md:p-8 md:pb-10">
+        <header className="sticky top-0 z-30 mb-5 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/95 py-3 backdrop-blur-sm">
+          <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase text-slate-500">Draft schedule</p>
             <h1 className="mt-1 text-xl font-semibold text-slate-900">{targetYear}年{targetMonth}月 シフト編集</h1>
           </div>
-          <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
-            <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:flex-none sm:text-sm">
               <Save size={16} /> {draftAction === 'save' ? '保存中...' : 'いったん保存'}
             </button>
-            <button type="button" onClick={discardDraft} disabled={draftAction !== null} className="inline-flex items-center gap-2 rounded-md border border-rose-200 px-4 py-2.5 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60">
+            <button type="button" onClick={discardDraft} disabled={draftAction !== null} className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60 sm:flex-none sm:text-sm">
               <Trash2 size={16} /> {draftAction === 'discard' ? '破棄中...' : '破棄して生成し直す'}
             </button>
-            <button type="button" onClick={confirmDraft} disabled={draftAction !== null} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">
+            <button type="button" onClick={confirmDraft} disabled={draftAction !== null} className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60 sm:w-auto sm:text-sm">
               <Rocket size={16} /> {draftAction === 'confirm' ? '確定中...' : 'このシフトで確定する'}
             </button>
           </div>
@@ -925,35 +988,35 @@ export default function GeneratePage() {
           <span>欠員 {generatedSchedule.vacancyCount}枠</span>
         </div>
 
-        <div className="touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-max min-w-full table-fixed border-separate border-spacing-0 text-[11px]">
+        <div className="max-w-full touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+          <table className="w-max min-w-full table-fixed border-separate border-spacing-0 text-xs">
             <thead>
               <tr className="bg-slate-50 text-slate-600">
-                <th className="sticky left-0 z-20 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold">スタッフ</th>
+                <th className="sticky left-0 z-30 w-[150px] min-w-[150px] border-b border-r border-slate-200 bg-slate-50 px-3 py-3 text-left font-semibold shadow-sm">スタッフ</th>
                 {editDates.map(date => {
                   const day = Number(date.slice(-2))
-                  return <th key={date} className="w-[68px] min-w-[68px] border-b border-slate-200 px-1 py-2 text-center font-semibold">{day}日<span className="block text-[10px] font-normal">{weekdayLabel(date)}</span></th>
+                  return <th key={date} className="w-[104px] min-w-[104px] border-b border-slate-200 px-2 py-2.5 text-center font-semibold"><span className="block">{day}日</span><span className="block text-[10px] font-normal">{weekdayLabel(date)}</span><span className="mt-1 block text-[10px] font-medium text-slate-500">{dailyHours[date].toFixed(1)}h 人時</span></th>
                 })}
-                <th className="min-w-[86px] border-b border-slate-200 px-3 py-2 text-right font-semibold">出勤日数</th>
-                <th className="sticky right-0 z-20 min-w-[96px] border-b border-l border-slate-200 bg-slate-50 px-3 py-2 text-right font-semibold">勤務時間</th>
+                <th className="sticky right-0 z-30 min-w-[148px] border-b border-l border-slate-200 bg-slate-50 px-3 py-3 text-right font-semibold shadow-sm">月間集計</th>
               </tr>
             </thead>
             <tbody>
-              {generatedSchedule.staff.map(staff => (
-                <tr key={staff.id} className="text-slate-700">
-                  <th scope="row" className="sticky left-0 z-10 w-[88px] min-w-[88px] max-w-[88px] border-b border-r border-slate-200 bg-white px-2 py-1.5 text-left font-medium">
-                    <span className="block truncate text-[11px] text-slate-800">{staff.name}</span>
-                    <span className="mt-0.5 block truncate text-[9px] text-slate-400">{staff.mainJob}</span>
+              {generatedSchedule.staff.map(staff => {
+                const targetDays = staff.weeklyTargetDays ? staff.weeklyTargetDays * 4.3 : null
+                const fulfillment = targetDays && targetDays > 0 ? Math.round((staff.assignedDays / targetDays) * 100) : null
+                return <tr key={staff.id} className="text-slate-700">
+                  <th scope="row" className="sticky left-0 z-20 w-[150px] min-w-[150px] border-b border-r border-slate-200 bg-white px-3 py-2 text-left font-medium shadow-sm">
+                    <span className="block truncate text-xs text-slate-800">{staff.name}</span>
+                    <span className="mt-0.5 block truncate text-[10px] text-slate-400">{staff.mainJob}</span>
                   </th>
                   {editDates.map(date => (
-                    <td key={date} className="w-[68px] min-w-[68px] border-b border-slate-100 px-1 py-1">
-                      <input aria-label={`${staff.name} ${date} 勤務時間`} value={staff.shifts[date] || ''} onChange={event => updateDraftShift(staff.id, date, event.target.value)} placeholder="-" autoComplete="off" inputMode="text" className="min-h-11 w-[60px] min-w-[60px] touch-manipulation rounded-md border border-transparent bg-transparent px-1 py-2 text-center text-[10px] text-slate-700 outline-none hover:border-slate-200 focus:border-slate-400 focus:bg-white focus:ring-1 focus:ring-slate-300" />
+                    <td key={date} className="w-[104px] min-w-[104px] border-b border-slate-100 px-1 py-1.5">
+                      <ShiftTimeEditor value={staff.shifts[date] || ''} minTime={minTime} maxTime={maxTime} presets={presets} onChange={value => updateDraftShift(staff.id, date, value)} />
                     </td>
                   ))}
-                  <td className="border-b border-slate-100 px-3 py-2 text-right tabular-nums">{staff.assignedDays}日</td>
-                  <td className="sticky right-0 z-10 border-b border-l border-slate-100 bg-white px-3 py-2 text-right font-semibold tabular-nums">{staff.assignedHours.toFixed(1)}h</td>
+                  <td className="sticky right-0 z-20 border-b border-l border-slate-100 bg-white px-3 py-2 text-right shadow-sm"><span className="block font-semibold tabular-nums">{staff.assignedHours.toFixed(1)}h</span><span className="block text-[10px] text-slate-500">{staff.assignedDays}日 · 充足率 {fulfillment === null ? '—' : `${fulfillment}%`}</span></td>
                 </tr>
-              ))}
+              })}
             </tbody>
           </table>
         </div>
@@ -973,6 +1036,7 @@ export default function GeneratePage() {
       </div>
 
       {draftError && <p role="alert" className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{draftError}</p>}
+      {requestAnalysisWarning && <p role="alert" className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{requestAnalysisWarning}</p>}
 
       <section className="mb-8">
         <div className="grid grid-cols-1 gap-0 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:items-stretch">
@@ -1256,4 +1320,57 @@ function TabButton({ id, label, active, onClick }: { id: string; label: string; 
       {label}
     </button>
   )
+}
+
+const getShiftTimes = (value: string) => {
+  const match = value.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/)
+  return match
+    ? { startHour: Number(match[1]), startMinute: match[2], endHour: Number(match[3]), endMinute: match[4] }
+    : null
+}
+
+function ShiftTimeEditor({ value, minTime, maxTime, presets, onChange }: {
+  value: string
+  minTime: number
+  maxTime: number
+  presets: string[]
+  onChange: (value: string) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const parsed = getShiftTimes(value)
+  const firstHour = Number.isFinite(minTime) ? Math.max(0, Math.ceil(minTime)) : 0
+  const lastHour = Number.isFinite(maxTime) ? Math.min(24, Math.floor(maxTime)) : 24
+  const availableHours = lastHour >= firstHour ? lastHour - firstHour + 1 : 1
+  const startHour = parsed?.startHour ?? firstHour
+  const startMinute = parsed?.startMinute ?? '00'
+  const endHour = parsed?.endHour ?? lastHour
+  const endMinute = parsed?.endMinute ?? '00'
+  const hours = Array.from({ length: availableHours }, (_, index) => firstHour + index)
+  const update = (part: 'startHour' | 'startMinute' | 'endHour' | 'endMinute', next: number | string) => {
+    const values = { startHour, startMinute, endHour, endMinute, [part]: next }
+    const formatted = `${String(values.startHour).padStart(2, '0')}:${values.startMinute}-${String(values.endHour).padStart(2, '0')}:${values.endMinute}`
+    onChange(formatted)
+  }
+
+  return <div className="relative">
+    <button type="button" aria-expanded={isOpen} onClick={() => setIsOpen(open => !open)} className="min-h-10 w-full rounded-md border border-transparent bg-transparent px-1 text-center font-medium tabular-nums text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:border-slate-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200">
+      {value || '休み'}
+    </button>
+    {isOpen && <div className="absolute left-1/2 z-50 mt-1 w-72 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl">
+      <div className="mb-3">
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">基本枠</p>
+        <div className="flex flex-wrap gap-1.5">
+          {[...presets, ''].map(preset => <button key={preset || 'off'} type="button" onClick={() => { onChange(preset); setIsOpen(false) }} className={`rounded border px-2 py-1 text-[11px] font-medium ${value === preset ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}>{preset || '休み'}</button>)}
+        </div>
+      </div>
+      <div className="border-t border-slate-100 pt-3">
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">個別に調整</p>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <label className="grid gap-1"><span className="text-slate-500">開始</span><div className="flex gap-1"><select value={startHour} onChange={event => update('startHour', Number(event.target.value))} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5"><option value="">時</option>{hours.map(hour => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}</option>)}</select><select value={startMinute} onChange={event => update('startMinute', event.target.value)} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5">{['00', '15', '30', '45'].map(minute => <option key={minute}>{minute}</option>)}</select></div></label>
+          <label className="grid gap-1"><span className="text-slate-500">終了</span><div className="flex gap-1"><select value={endHour} onChange={event => update('endHour', Number(event.target.value))} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5"><option value="">時</option>{hours.map(hour => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}</option>)}</select><select value={endMinute} onChange={event => update('endMinute', event.target.value)} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5">{['00', '15', '30', '45'].map(minute => <option key={minute}>{minute}</option>)}</select></div></label>
+        </div>
+      </div>
+      <button type="button" onClick={() => setIsOpen(false)} className="mt-3 w-full rounded border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">閉じる</button>
+    </div>}
+  </div>
 }

@@ -20,6 +20,8 @@ export type ConditionAnalysisInput = {
   memo: string
 }
 
+export type ParsedShiftRequest = ParsedConditionDay
+
 const isTime = (value: unknown): value is string => {
   if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) return false
   const [hours, minutes] = value.split(':').map(Number)
@@ -45,6 +47,19 @@ export const parseParsedConditions = (value: unknown): ParsedConditions | null =
     result[day] = { is_available: true, start_time: entry.start_time, end_time: entry.end_time }
   }
   return result
+}
+
+export const parseParsedShiftRequest = (value: unknown): ParsedShiftRequest | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const entry = value as Partial<ParsedShiftRequest>
+  if (typeof entry.is_available !== 'boolean') return null
+  if (!entry.is_available) {
+    return entry.start_time === null && entry.end_time === null
+      ? { is_available: false, start_time: null, end_time: null }
+      : null
+  }
+  if (!isTime(entry.start_time) || !isTime(entry.end_time) || entry.start_time >= entry.end_time) return null
+  return { is_available: true, start_time: entry.start_time, end_time: entry.end_time }
 }
 
 export const formatParsedConditions = (value: unknown): string | null => {
