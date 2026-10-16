@@ -359,7 +359,7 @@ function StoreLayoutContent({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="w-full flex-1 overflow-visible pb-24 md:ml-[268px] md:pb-10">
+      <main className="min-w-0 w-full flex-1 overflow-x-hidden pb-24 md:ml-[268px] md:pb-10">
         <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 md:hidden">
           <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-900">{currentStaff.name}</p><p className="text-[10px] text-slate-500">{isEmployee ? '社員' : 'アルバイト'}</p></div>
           <button type="button" onClick={logout} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600"><LogOut size={13} />名前変更</button>

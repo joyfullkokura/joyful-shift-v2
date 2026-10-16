@@ -6,6 +6,7 @@ import { parseSkillOptions } from '@/lib/skill-options'
 import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import ShiftTimeEditor from '@/components/ShiftTimeEditor'
 
 const tToF = (t: string | undefined) => {
   if (!t) return 10
@@ -184,6 +185,25 @@ const shiftHoursFromLabel = (shift: string) => {
   return Math.max(0, end - start)
 }
 
+const WEEKS_PER_MONTH = 4.3
+const DATE_COL_CLASS = 'w-[104px] min-w-[104px] max-w-[104px]'
+const STAFF_COL_CLASS = 'sticky left-0 w-[148px] min-w-[148px] max-w-[148px] border-r border-slate-200 shadow-[2px_0_6px_-3px_rgba(15,23,42,0.18)]'
+const SUMMARY_COL_CLASS = 'sticky right-0 w-[132px] min-w-[132px] border-l border-slate-200 shadow-[-2px_0_6px_-3px_rgba(15,23,42,0.18)]'
+
+const fulfillmentPercent = (assignedDays: number, weeklyTargetDays?: number) => {
+  if (!weeklyTargetDays || weeklyTargetDays <= 0) return null
+  const targetDays = weeklyTargetDays * WEEKS_PER_MONTH
+  if (targetDays <= 0) return null
+  return Math.round((assignedDays / targetDays) * 100)
+}
+
+const dayTone = (dateStr: string) => {
+  const weekDay = new Date(`${dateStr}T00:00:00`).getDay()
+  if (weekDay === 0 || HOLIDAYS[dateStr]) return 'text-rose-600'
+  if (weekDay === 6) return 'text-sky-600'
+  return 'text-slate-600'
+}
+
 export default function GeneratePage() {
   const { store_id } = useParams()
   const router = useRouter()
@@ -216,6 +236,7 @@ export default function GeneratePage() {
   const [draftAction, setDraftAction] = useState<'save' | 'discard' | 'confirm' | null>(null)
   const [monthlyTargetHours, setMonthlyTargetHours] = useState<number>(168)
   const [activeCell, setActiveCell] = useState<ActiveShiftCell | null>(null)
+  const closeShiftEditor = useCallback(() => setActiveCell(null), [])
 
   const minTime = useMemo(() => tToF(storeInfo?.open_time), [storeInfo])
   const maxTime = useMemo(() => tToF(storeInfo?.close_time), [storeInfo])
@@ -223,11 +244,11 @@ export default function GeneratePage() {
 
   useEffect(() => {
     const closeEditorOnOutsidePointer = (event: PointerEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest('[data-shift-editor]')) setActiveCell(null)
+      if (!(event.target instanceof Element) || !event.target.closest('[data-shift-editor]')) closeShiftEditor()
     }
     document.addEventListener('pointerdown', closeEditorOnOutsidePointer)
     return () => document.removeEventListener('pointerdown', closeEditorOnOutsidePointer)
-  }, [])
+  }, [closeShiftEditor])
 
   const loadAllSettings = useCallback(async () => {
     if (!store_id) return
@@ -1008,64 +1029,92 @@ export default function GeneratePage() {
     const presets = Array.from(new Set([
       ...Object.values(slots).flatMap(daySlots => Object.values(daySlots).map(slot => `${fToT(slot.start)}-${fToT(slot.end)}`)),
       ...generatedSchedule.staff.flatMap(staff => Object.values(staff.shifts).filter(shift => shiftHoursFromLabel(shift) > 0)),
-    ])).slice(0, 8)
+    ])).sort((left, right) => tToF(left.split('-')[0]) - tToF(right.split('-')[0])).slice(0, 10)
+    const activateShiftCell = (staffId: string, date: string, mode: 'quick' | 'detail') => {
+      setActiveCell(current => {
+        if (mode === 'quick' && current?.mode === 'detail' && (current.staffId !== staffId || current.date !== date)) return current
+        return { staffId, date, mode }
+      })
+    }
     return (
-      <div className="mx-auto w-full max-w-[1600px] overflow-x-hidden p-4 pb-60 md:p-8 md:pb-10">
-        <header className="sticky top-0 z-30 mb-5 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/95 py-3 backdrop-blur-sm">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase text-slate-500">Draft schedule</p>
-            <h1 className="mt-1 text-xl font-semibold text-slate-900">{targetYear}年{targetMonth}月 シフト編集</h1>
-          </div>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-            <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:flex-none sm:text-sm">
-              <Save size={16} /> {draftAction === 'save' ? '保存中...' : 'いったん保存'}
-            </button>
-            <button type="button" onClick={discardDraft} disabled={draftAction !== null} className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60 sm:flex-none sm:text-sm">
-              <Trash2 size={16} /> {draftAction === 'discard' ? '破棄中...' : '破棄して生成し直す'}
-            </button>
-            <button type="button" onClick={confirmDraft} disabled={draftAction !== null} className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60 sm:w-auto sm:text-sm">
-              <Rocket size={16} /> {draftAction === 'confirm' ? '確定中...' : 'このシフトで確定する'}
-            </button>
+      <div className="mx-auto w-full min-w-0 max-w-[1600px] p-4 pb-60 md:p-8 md:pb-10">
+        <header className="sticky top-0 z-30 mb-5 border-b border-slate-200 bg-white/95 py-3 backdrop-blur-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Draft schedule</p>
+              <h1 className="mt-1 truncate text-xl font-semibold text-slate-900">{targetMonth}月 シフト編集</h1>
+            </div>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+              <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:text-sm">
+                <Save size={16} /> {draftAction === 'save' ? '保存中...' : 'いったん保存'}
+              </button>
+              <button type="button" onClick={discardDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60 sm:text-sm">
+                <Trash2 size={16} /> {draftAction === 'discard' ? '破棄中...' : '破棄して生成し直す'}
+              </button>
+              <button type="button" onClick={confirmDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60 sm:text-sm">
+                <Rocket size={16} /> {draftAction === 'confirm' ? '確定中...' : 'この案をベースに確定'}
+              </button>
+            </div>
           </div>
         </header>
 
         {draftNotice && <p role="status" className="mb-4 text-sm text-slate-600">{draftNotice}</p>}
         {(draftError || confirmError) && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{draftError || confirmError}</p>}
 
-        <div className="mb-4 flex flex-wrap gap-6 text-sm text-slate-600">
+        <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-600">
           <span>スタッフ {generatedSchedule.staff.length}名</span>
           <span>合計人時 <strong className="font-semibold text-slate-900">{generatedSchedule.assignedHours.toFixed(1)}h</strong></span>
           <span>欠員 {generatedSchedule.vacancyCount}枠</span>
         </div>
 
-        <div className="max-w-full touch-pan-x overscroll-x-contain overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-          <table className="w-max min-w-full table-fixed border-separate border-spacing-0 text-xs">
+        <div className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-slate-200 bg-white shadow-sm">
+          <table className="w-max border-separate border-spacing-0 text-xs">
             <thead>
               <tr className="bg-slate-50 text-slate-600">
-                <th className="sticky left-0 z-30 w-[150px] min-w-[150px] border-b border-r border-slate-200 bg-slate-50 px-3 py-3 text-left font-semibold shadow-sm">スタッフ</th>
-                {editDates.map(date => {
-                  const day = Number(date.slice(-2))
-                  return <th key={date} className="w-[104px] min-w-[104px] border-b border-slate-200 px-2 py-2.5 text-center font-semibold"><span className="block">{day}日</span><span className="block text-[10px] font-normal">{weekdayLabel(date)}</span><span className="mt-1 block text-[10px] font-medium text-slate-500">{dailyHours[date].toFixed(1)}h 人時</span></th>
-                })}
-                <th className="sticky right-0 z-30 min-w-[148px] border-b border-l border-slate-200 bg-slate-50 px-3 py-3 text-right font-semibold shadow-sm">月間集計</th>
+                <th className={`${STAFF_COL_CLASS} z-30 border-b bg-slate-50 px-3 py-3 text-left font-semibold`}>スタッフ名</th>
+                {editDates.map(date => (
+                  <th key={date} className={`${DATE_COL_CLASS} border-b border-slate-200 px-1.5 py-2 text-center font-semibold ${dayTone(date)}`}>
+                    <span className="block text-[13px] leading-none">{Number(date.slice(-2))}</span>
+                    <span className="mt-0.5 block text-[10px] font-normal">{weekdayLabel(date)}</span>
+                    <span className="mt-1 block text-[10px] font-medium tabular-nums text-slate-500">{dailyHours[date].toFixed(1)}h</span>
+                  </th>
+                ))}
+                <th className={`${SUMMARY_COL_CLASS} z-30 border-b bg-slate-50 px-3 py-3 text-right font-semibold`}>月間集計</th>
               </tr>
             </thead>
             <tbody>
               {generatedSchedule.staff.map(staff => {
-                const targetDays = staff.weeklyTargetDays ? staff.weeklyTargetDays * 4.3 : null
-                const fulfillment = targetDays && targetDays > 0 ? Math.round((staff.assignedDays / targetDays) * 100) : null
-                return <tr key={staff.id} className="text-slate-700">
-                  <th scope="row" className="sticky left-0 z-20 w-[150px] min-w-[150px] border-b border-r border-slate-200 bg-white px-3 py-2 text-left font-medium shadow-sm">
-                    <span className="block truncate text-xs text-slate-800">{staff.name}</span>
-                    <span className="mt-0.5 block truncate text-[10px] text-slate-400">{staff.mainJob}</span>
-                  </th>
-                  {editDates.map(date => (
-                    <td key={date} className="w-[104px] min-w-[104px] border-b border-slate-100 px-1 py-1.5">
-                      <ShiftTimeEditor value={staff.shifts[date] || ''} minTime={minTime} maxTime={maxTime} presets={presets} onChange={value => updateDraftShift(staff.id, date, value)} />
+                const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays)
+                return (
+                  <tr key={staff.id} className="text-slate-700">
+                    <th scope="row" className={`${STAFF_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-left font-medium`}>
+                      <span className="block truncate text-xs text-slate-800">{staff.name}</span>
+                      <span className="mt-0.5 block truncate text-[10px] text-slate-400">{staff.mainJob}</span>
+                    </th>
+                    {editDates.map(date => (
+                      <td key={date} className={`${DATE_COL_CLASS} border-b border-slate-100 px-1 py-1`}>
+                        <ShiftTimeEditor
+                          value={staff.shifts[date] || ''}
+                          minTime={minTime}
+                          maxTime={maxTime}
+                          presets={presets}
+                          isActive={activeCell?.staffId === staff.id && activeCell.date === date}
+                          mode={activeCell?.staffId === staff.id && activeCell.date === date ? activeCell.mode : 'quick'}
+                          onActivate={nextMode => activateShiftCell(staff.id, date, nextMode)}
+                          onDeactivate={closeShiftEditor}
+                          onChange={nextValue => updateDraftShift(staff.id, date, nextValue)}
+                        />
+                      </td>
+                    ))}
+                    <td className={`${SUMMARY_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-right`}>
+                      <span className="block font-semibold tabular-nums text-slate-900">{staff.assignedHours.toFixed(1)}h</span>
+                      <span className="mt-0.5 block text-[10px] tabular-nums text-slate-500">出勤 {staff.assignedDays}日</span>
+                      <span className={`mt-0.5 block text-[10px] font-medium tabular-nums ${fulfillment !== null && fulfillment < 80 ? 'text-amber-700' : 'text-slate-600'}`}>
+                        充足率 {fulfillment === null ? '—' : `${fulfillment}%`}
+                      </span>
                     </td>
-                  ))}
-                  <td className="sticky right-0 z-20 border-b border-l border-slate-100 bg-white px-3 py-2 text-right shadow-sm"><span className="block font-semibold tabular-nums">{staff.assignedHours.toFixed(1)}h</span><span className="block text-[10px] text-slate-500">{staff.assignedDays}日 · 充足率 {fulfillment === null ? '—' : `${fulfillment}%`}</span></td>
-                </tr>
+                  </tr>
+                )
               })}
             </tbody>
           </table>
@@ -1075,7 +1124,7 @@ export default function GeneratePage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-4 pb-60 md:p-8 md:pb-10">
+    <div className="mx-auto min-w-0 max-w-6xl p-4 pb-60 md:p-8 md:pb-10">
       <div className="mb-8 flex items-center justify-between rounded-md border border-[var(--border)] bg-white p-5 shadow-sm">
         <button onClick={() => changeMonth(-1)} className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100"><ChevronLeft size={18} /></button>
         <div className="text-center">
@@ -1267,26 +1316,23 @@ export default function GeneratePage() {
               </div>
             </div>
             {confirmError && <p role="alert" className="text-sm font-medium text-red-700">{confirmError}</p>}
-            <div className="overflow-x-auto rounded-md border border-[var(--border)] bg-white">
-              <table className="w-max min-w-full border-separate border-spacing-0 text-[11px]">
+            <div className="min-w-0 overflow-x-auto overscroll-x-contain rounded-md border border-[var(--border)] bg-white">
+              <table className="w-max border-separate border-spacing-0 text-[11px]">
                 <thead>
                   <tr className="bg-slate-50 text-slate-600">
-                    <th className="sticky left-0 z-20 min-w-[150px] border-b border-r border-[var(--border)] bg-slate-50 px-3 py-2 text-left font-bold">スタッフ名</th>
-                    <th className="min-w-[100px] border-b border-[var(--border)] px-3 py-2 text-left font-bold">メイン職種</th>
-                    <th className="min-w-[100px] border-b border-[var(--border)] px-3 py-2 text-left font-bold">雇用区分</th>
+                    <th className={`${STAFF_COL_CLASS} z-20 border-b bg-slate-50 px-3 py-2 text-left font-bold`}>スタッフ名</th>
                     {Array.from({ length: daysInMonth }, (_, index) => {
                       const day = index + 1
                       const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                      const weekDay = new Date(targetYear, targetMonth - 1, day).getDay()
-                      const isRedDay = weekDay === 0 || Boolean(HOLIDAYS[dateStr])
-                      const dayColor = isRedDay ? 'bg-red-50/40 text-red-600' : weekDay === 6 ? 'bg-blue-50/40 text-blue-600' : 'bg-slate-50'
                       const dayAlerts = generatedSchedule.alerts.filter(alert => alert.id.startsWith(`${dateStr}-`))
                       const dayVacancyCount = dayAlerts.filter(alert => alert.type === 'vacancy').length
                       const daySkillAlerts = dayAlerts.filter(alert => alert.type === 'skill')
+                      const dayHours = generatedSchedule.staff.reduce((total, person) => total + shiftHoursFromLabel(person.shifts[dateStr] || ''), 0)
                       return (
-                        <th key={dateStr} className={`w-[76px] min-w-[76px] border-b border-[var(--border)] px-1 py-2 text-center align-top font-bold ${dayColor}`}>
+                        <th key={dateStr} className={`${DATE_COL_CLASS} border-b border-[var(--border)] px-1 py-2 text-center align-top font-bold ${dayTone(dateStr)}`}>
                           <span className="block">{day}日</span>
                           <span className="block text-[10px] font-medium">{weekdayLabel(dateStr)}</span>
+                          <span className="mt-1 block text-[10px] font-medium tabular-nums text-slate-500">{dayHours.toFixed(1)}h</span>
                           <span className="mt-1 flex max-h-16 flex-col gap-1 overflow-y-auto break-words text-left font-medium">
                             {dayVacancyCount > 0 && (
                               <span className="rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[10px] leading-tight text-red-800">
@@ -1312,33 +1358,36 @@ export default function GeneratePage() {
                         </th>
                       )
                     })}
-                    <th className="min-w-[86px] border-b border-[var(--border)] px-3 py-2 text-right font-bold">出勤日数</th>
-                    <th className="sticky right-0 z-20 min-w-[96px] border-b border-l border-[var(--border)] bg-slate-50 px-3 py-2 text-right font-bold">勤務時間</th>
+                    <th className={`${SUMMARY_COL_CLASS} z-20 border-b bg-slate-50 px-3 py-2 text-right font-bold`}>月間集計</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {generatedSchedule.staff.map(staff => (
+                  {generatedSchedule.staff.map(staff => {
+                    const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays)
+                    return (
                     <tr key={staff.id} className="text-slate-700">
-                      <th scope="row" className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2 text-left font-bold">{staff.name}</th>
-                      <td className="border-b border-slate-100 px-3 py-2">{staff.mainJob}</td>
-                      <td className="border-b border-slate-100 px-3 py-2">{staff.employmentType}</td>
+                      <th scope="row" className={`${STAFF_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-left font-bold`}>
+                        <span className="block truncate">{staff.name}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-medium text-slate-400">{staff.mainJob} · {staff.employmentType}</span>
+                      </th>
                       {Array.from({ length: daysInMonth }, (_, index) => {
                         const day = index + 1
                         const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                        const weekDay = new Date(targetYear, targetMonth - 1, day).getDay()
-                        const isRedDay = weekDay === 0 || Boolean(HOLIDAYS[dateStr])
                         const shift = staff.shifts[dateStr] || ''
-                        const dateColor = isRedDay ? 'bg-red-50/40' : weekDay === 6 ? 'bg-blue-50/40' : 'bg-white'
                         return (
-                          <td key={dateStr} className={`w-[76px] min-w-[76px] border-b border-slate-100 px-1 py-2 text-center ${shift === '×' ? 'bg-red-50 font-bold text-red-500' : `${dateColor} ${shift ? 'font-medium text-slate-700' : 'text-slate-300'}`}`}>
-                            {shift}
+                          <td key={dateStr} className={`${DATE_COL_CLASS} border-b border-slate-100 px-1 py-2 text-center ${shift === '×' ? 'bg-red-50 font-bold text-red-500' : shift ? 'font-medium tabular-nums text-slate-700' : 'text-slate-300'}`}>
+                            <span className="block whitespace-nowrap">{shift || '—'}</span>
                           </td>
                         )
                       })}
-                      <td className="border-b border-slate-100 px-3 py-2 text-right font-bold tabular-nums">{staff.assignedDays}日</td>
-                      <td className="sticky right-0 z-10 border-b border-l border-slate-100 bg-white px-3 py-2 text-right font-bold tabular-nums">{staff.assignedHours.toFixed(1)}h</td>
+                      <td className={`${SUMMARY_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-right`}>
+                        <span className="block font-bold tabular-nums">{staff.assignedHours.toFixed(1)}h</span>
+                        <span className="mt-0.5 block text-[10px] tabular-nums text-slate-500">出勤 {staff.assignedDays}日</span>
+                        <span className="mt-0.5 block text-[10px] font-medium tabular-nums text-slate-600">充足率 {fulfillment === null ? '—' : `${fulfillment}%`}</span>
+                      </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1372,55 +1421,3 @@ function TabButton({ id, label, active, onClick }: { id: string; label: string; 
   )
 }
 
-const getShiftTimes = (value: string) => {
-  const match = value.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/)
-  return match
-    ? { startHour: Number(match[1]), startMinute: match[2], endHour: Number(match[3]), endMinute: match[4] }
-    : null
-}
-
-function ShiftTimeEditor({ value, minTime, maxTime, presets, onChange }: {
-  value: string
-  minTime: number
-  maxTime: number
-  presets: string[]
-  onChange: (value: string) => void
-}) {
-  const [isOpen, setIsOpen] = useState(false)
-  const parsed = getShiftTimes(value)
-  const firstHour = Number.isFinite(minTime) ? Math.max(0, Math.ceil(minTime)) : 0
-  const lastHour = Number.isFinite(maxTime) ? Math.min(24, Math.floor(maxTime)) : 24
-  const availableHours = lastHour >= firstHour ? lastHour - firstHour + 1 : 1
-  const startHour = parsed?.startHour ?? firstHour
-  const startMinute = parsed?.startMinute ?? '00'
-  const endHour = parsed?.endHour ?? lastHour
-  const endMinute = parsed?.endMinute ?? '00'
-  const hours = Array.from({ length: availableHours }, (_, index) => firstHour + index)
-  const update = (part: 'startHour' | 'startMinute' | 'endHour' | 'endMinute', next: number | string) => {
-    const values = { startHour, startMinute, endHour, endMinute, [part]: next }
-    const formatted = `${String(values.startHour).padStart(2, '0')}:${values.startMinute}-${String(values.endHour).padStart(2, '0')}:${values.endMinute}`
-    onChange(formatted)
-  }
-
-  return <div className="relative">
-    <button type="button" aria-expanded={isOpen} onClick={() => setIsOpen(open => !open)} className="min-h-10 w-full rounded-md border border-transparent bg-transparent px-1 text-center font-medium tabular-nums text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:border-slate-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-200">
-      {value || '休み'}
-    </button>
-    {isOpen && <div className="absolute left-1/2 z-50 mt-1 w-72 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl">
-      <div className="mb-3">
-        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">基本枠</p>
-        <div className="flex flex-wrap gap-1.5">
-          {[...presets, ''].map(preset => <button key={preset || 'off'} type="button" onClick={() => { onChange(preset); setIsOpen(false) }} className={`rounded border px-2 py-1 text-[11px] font-medium ${value === preset ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}>{preset || '休み'}</button>)}
-        </div>
-      </div>
-      <div className="border-t border-slate-100 pt-3">
-        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">個別に調整</p>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <label className="grid gap-1"><span className="text-slate-500">開始</span><div className="flex gap-1"><select value={startHour} onChange={event => update('startHour', Number(event.target.value))} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5"><option value="">時</option>{hours.map(hour => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}</option>)}</select><select value={startMinute} onChange={event => update('startMinute', event.target.value)} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5">{['00', '15', '30', '45'].map(minute => <option key={minute}>{minute}</option>)}</select></div></label>
-          <label className="grid gap-1"><span className="text-slate-500">終了</span><div className="flex gap-1"><select value={endHour} onChange={event => update('endHour', Number(event.target.value))} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5"><option value="">時</option>{hours.map(hour => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}</option>)}</select><select value={endMinute} onChange={event => update('endMinute', event.target.value)} className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-1.5">{['00', '15', '30', '45'].map(minute => <option key={minute}>{minute}</option>)}</select></div></label>
-        </div>
-      </div>
-      <button type="button" onClick={() => setIsOpen(false)} className="mt-3 w-full rounded border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">閉じる</button>
-    </div>}
-  </div>
-}
