@@ -50,6 +50,7 @@ type GeneratedStaffShift = {
   id: string
   name: string
   mainJob: string
+  jobOptions?: string[]
   isEmployee: boolean
   employmentType: string
   shifts: Record<string, string>
@@ -96,6 +97,31 @@ type ShiftRequest = {
   end_time?: string | null
   memo?: string | null
   parsed_request?: unknown
+}
+
+type ActiveShiftCell = {
+  staffId: string
+  date: string
+  mode: 'quick' | 'detail'
+}
+
+const getJobOptions = (mainJob: string | null | undefined, possibleGroups: string | null | undefined) => {
+  const options = new Set<string>()
+  const addJob = (value: string) => {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'hd' || normalized === 'hn' || value.includes('ホール')) options.add('ホール')
+    if (normalized === 'kd' || normalized === 'kn' || value.includes('キッチン')) options.add('キッチン')
+    if (value.trim() && value !== '共通' && !['hd', 'hn', 'kd', 'kn'].includes(normalized) && !value.includes('ホール') && !value.includes('キッチン')) options.add(value.trim())
+  }
+
+  if (mainJob === '共通') {
+    options.add('ホール')
+    options.add('キッチン')
+  } else if (mainJob) {
+    addJob(mainJob)
+  }
+  ;(possibleGroups || '').split(',').filter(Boolean).forEach(addJob)
+  return [...options]
 }
 
 type TimeRange = {
@@ -189,10 +215,19 @@ export default function GeneratePage() {
   const [requestAnalysisWarning, setRequestAnalysisWarning] = useState('')
   const [draftAction, setDraftAction] = useState<'save' | 'discard' | 'confirm' | null>(null)
   const [monthlyTargetHours, setMonthlyTargetHours] = useState<number>(168)
+  const [activeCell, setActiveCell] = useState<ActiveShiftCell | null>(null)
 
   const minTime = useMemo(() => tToF(storeInfo?.open_time), [storeInfo])
   const maxTime = useMemo(() => tToF(storeInfo?.close_time), [storeInfo])
   const groups = useMemo(() => storeInfo?.group_options?.split(',') || [], [storeInfo])
+
+  useEffect(() => {
+    const closeEditorOnOutsidePointer = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest('[data-shift-editor]')) setActiveCell(null)
+    }
+    document.addEventListener('pointerdown', closeEditorOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeEditorOnOutsidePointer)
+  }, [])
 
   const loadAllSettings = useCallback(async () => {
     if (!store_id) return
@@ -455,6 +490,7 @@ export default function GeneratePage() {
       id: staff.id,
       name: staff.name,
       mainJob: staff.main_job || '未設定',
+      jobOptions: getJobOptions(staff.main_job, staff.possible_groups),
       isEmployee: Boolean(staff.is_employee),
       employmentType: staff.is_employee ? '社員' : 'アルバイト',
       shifts: {},
@@ -876,6 +912,20 @@ export default function GeneratePage() {
       })
       const assignedHours = staff.reduce((total, person) => total + person.assignedHours, 0)
       return { ...current, staff, assignedHours }
+    })
+  }
+
+  const toggleDraftStaffJob = (staffId: string) => {
+    setGeneratedSchedule(current => {
+      if (!current) return current
+      return {
+        ...current,
+        staff: current.staff.map(person => {
+          if (person.id !== staffId || !person.jobOptions || person.jobOptions.length < 2) return person
+          const currentIndex = Math.max(0, person.jobOptions.indexOf(person.mainJob))
+          return { ...person, mainJob: person.jobOptions[(currentIndex + 1) % person.jobOptions.length] }
+        }),
+      }
     })
   }
 
