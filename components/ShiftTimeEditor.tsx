@@ -73,8 +73,6 @@ export default function ShiftTimeEditor({
 }: ShiftTimeEditorProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const hoverCloseTimer = useRef<number | null>(null)
-  const hoverOpenTimer = useRef<number | null>(null)
   const [mounted, setMounted] = useState(false)
   const [panelPos, setPanelPos] = useState({ top: 0, left: 0, width: 300 })
   const [openPart, setOpenPart] = useState<TimePart | null>(null)
@@ -91,11 +89,6 @@ export default function ShiftTimeEditor({
   }
 
   useEffect(() => { setMounted(true) }, [])
-  useEffect(() => () => {
-    if (hoverCloseTimer.current !== null) window.clearTimeout(hoverCloseTimer.current)
-    if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current)
-  }, [])
-
   useEffect(() => {
     if (!isActive) setOpenPart(null)
   }, [isActive])
@@ -134,27 +127,6 @@ export default function ShiftTimeEditor({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isActive, onDeactivate])
 
-  const clearHoverClose = () => {
-    if (hoverCloseTimer.current !== null) {
-      window.clearTimeout(hoverCloseTimer.current)
-      hoverCloseTimer.current = null
-    }
-  }
-
-  const clearHoverOpen = () => {
-    if (hoverOpenTimer.current !== null) {
-      window.clearTimeout(hoverOpenTimer.current)
-      hoverOpenTimer.current = null
-    }
-  }
-
-  const scheduleHoverClose = () => {
-    clearHoverClose()
-    hoverCloseTimer.current = window.setTimeout(() => {
-      if (mode === 'quick') onDeactivate()
-    }, 180)
-  }
-
   const applyShift = (next: ParsedShift) => {
     onChange(formatShiftLabel(next))
   }
@@ -175,25 +147,8 @@ export default function ShiftTimeEditor({
         type="button"
         aria-expanded={isActive}
         aria-haspopup="dialog"
-        onClick={() => {
-          clearHoverOpen()
-          onActivate('detail')
-        }}
-        onFocus={() => onActivate('detail')}
-        onPointerEnter={event => {
-          if (event.pointerType !== 'mouse') return
-          clearHoverClose()
-          clearHoverOpen()
-          hoverOpenTimer.current = window.setTimeout(() => {
-            onActivate(isActive && mode === 'detail' ? 'detail' : 'quick')
-          }, 220)
-        }}
-        onPointerLeave={event => {
-          if (event.pointerType !== 'mouse') return
-          clearHoverOpen()
-          scheduleHoverClose()
-        }}
-        className={`flex min-h-10 w-full min-w-0 items-center justify-center rounded-md border px-1 text-center text-[11px] font-medium tabular-nums tracking-tight transition ${
+        onClick={() => onActivate('detail')}
+        className={`flex h-8 min-h-8 w-full min-w-0 items-center justify-center rounded border px-1 text-center text-[11px] font-medium tabular-nums transition ${
           isActive
             ? 'border-slate-500 bg-white text-slate-900 ring-2 ring-slate-200'
             : 'border-transparent bg-transparent hover:border-slate-300 hover:bg-slate-50'
@@ -209,11 +164,6 @@ export default function ShiftTimeEditor({
           role="dialog"
           aria-label="勤務時間を編集"
           style={{ top: panelPos.top, left: panelPos.left, width: panelPos.width }}
-          onPointerEnter={clearHoverClose}
-          onPointerLeave={event => {
-            if (event.pointerType !== 'mouse') return
-            scheduleHoverClose()
-          }}
           className="fixed z-[80] rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl"
         >
           <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">基本枠</p>

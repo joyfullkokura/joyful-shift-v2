@@ -47,6 +47,18 @@ const weekdayLabel = (dateStr: string) => {
   return labels[d.getDay()]
 }
 
+type JobRole = 'ホール' | 'キッチン'
+
+type ShiftRequirement = {
+  id: string
+  group: string
+  role: JobRole | null
+  start: number
+  end: number
+  staffId?: string | null
+  staffIds?: string[]
+}
+
 type GeneratedStaffShift = {
   id: string
   name: string
@@ -55,9 +67,12 @@ type GeneratedStaffShift = {
   isEmployee: boolean
   employmentType: string
   shifts: Record<string, string>
+  assignedRoles?: Record<string, JobRole>
+  skills?: string[]
   assignedDays: number
   assignedHours: number
   weeklyTargetDays?: number
+  monthlyTargetHours?: number
 }
 
 type GeneratedSchedule = {
@@ -65,6 +80,9 @@ type GeneratedSchedule = {
   vacancyCount: number
   assignedHours: number
   alerts: ScheduleAlert[]
+  requirements?: Record<string, ShiftRequirement[]>
+  skillOptions?: string[]
+  operatingHours?: { start: number; end: number } | null
 }
 
 type ScheduleAlert = {
@@ -76,8 +94,10 @@ type ScheduleAlert = {
 type StaffRecord = {
   id: string
   name: string
+  role?: string | null
   rank?: string | null
   weekly_target_days?: number | null
+  target_work_days?: number | null
   monthly_target_hours?: number | null
   skills?: string | null
   is_employee?: boolean | null
@@ -176,23 +196,170 @@ const formatAlertTime = (time: number) => {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
+const calculateActualHours = (start: number, end: number) => {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0
+  let duration = end - start
+  if (duration < 0) duration += 24
+  if (duration <= 0) return 0
+  const breakHours = duration > 8 ? 1 : duration > 6 ? 0.75 : 0
+  return Math.max(0, duration - breakHours)
+}
+
 const shiftHoursFromLabel = (shift: string) => {
   const match = shift.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/)
   if (!match) return 0
   const start = Number(match[1]) + Number(match[2]) / 60
-  let end = Number(match[3]) + Number(match[4]) / 60
-  if (end < start) end += 24
-  return Math.max(0, end - start)
+  const end = Number(match[3]) + Number(match[4]) / 60
+  return calculateActualHours(start, end)
 }
 
-const WEEKS_PER_MONTH = 4.3
+const actualHoursForShifts = (shifts: Record<string, string>) => (
+  Object.values(shifts).reduce((total, shift) => total + shiftHoursFromLabel(shift), 0)
+)
+
+const isMultiRoleStaff = (staff: Pick<GeneratedStaffShift, 'mainJob' | 'jobOptions'>) => (
+  staff.mainJob === '共通'
+  || Boolean(staff.jobOptions?.includes('ホール') && staff.jobOptions.includes('キッチン'))
+)
+
+const compareStaffOrder = (left: GeneratedStaffShift, right: GeneratedStaffShift) => {
+  const roleOrder = (staff: GeneratedStaffShift) => isMultiRoleStaff(staff)
+    ? 0
+    : staff.mainJob === 'ホール'
+      ? 1
+      : staff.mainJob === 'キッチン'
+        ? 2
+        : 3
+  return roleOrder(left) - roleOrder(right)
+    || Number(right.isEmployee) - Number(left.isEmployee)
+    || left.name.localeCompare(right.name, 'ja')
+    || left.id.localeCompare(right.id)
+}
+
+const shiftRangeFromLabel = (shift: string) => {
+  const [start, end] = shift.split('-')
+  return toTimeRange(start, end)
+}
+
+const calculateScheduleAlerts = (schedule: GeneratedSchedule, targetMonth: number): ScheduleAlert[] => {
+  if (!schedule.requirements) return schedule.alerts
+  const alerts: ScheduleAlert[] = []
+  const requirementsByDate = schedule.requirements || {}
+  const skillOptions = schedule.skillOptions || []
+  const operatingStart = schedule.operatingHours?.start ?? 0
+  const operatingEnd = schedule.operatingHours?.end ?? 24
+  const skillsByRole: { role: JobRole; skills: string[] }[] = [
+    { role: 'ホール', skills: skillOptions.filter(skill => skill.startsWith('[H]')) },
+    { role: 'キッチン', skills: skillOptions.filter(skill => skill.startsWith('[K]')) },
+  ]
+
+  Object.entries(requirementsByDate).forEach(([date, requirements]) => {
+    const shiftDetails = schedule.staff.map(staff => ({
+      staff,
+      range: shiftRangeFromLabel(staff.shifts[date] || ''),
+      role: staff.assignedRoles?.[date]
+        || (staff.mainJob === 'ホール' || staff.mainJob === 'キッチン'
+          ? staff.mainJob
+          : requirements.find(requirement => requirement.staffId === staff.id)?.role || null),
+    }))
+
+    requirements.forEach(requirement => {
+      const assignedIds = requirement.staffIds || (requirement.staffId ? [requirement.staffId] : [])
+      const ranges = shiftDetails
+        .filter(({ staff, role }) => assignedIds.includes(staff.id) && (!requirement.role || role === requirement.role))
+        .map(({ range }) => range)
+        .filter((range): range is TimeRange => range !== null)
+        .sort((left, right) => left.start - right.start)
+      let coveredUntil = requirement.start
+      ranges.forEach(range => {
+        if (range.start <= coveredUntil + 0.001) coveredUntil = Math.max(coveredUntil, range.end)
+      })
+      const covered = coveredUntil >= requirement.end - 0.001
+      if (!covered) {
+        const day = Number(date.slice(-2))
+        alerts.push({
+          id: `${date}-${requirement.id}-vacancy`,
+          type: 'vacancy',
+          message: `${targetMonth}/${String(day).padStart(2, '0')} ${formatAlertTime(requirement.start)}-${formatAlertTime(requirement.end)} ${labelForGroup(requirement.group)} 1枠欠員`,
+        })
+      }
+    })
+
+    const missingIntervals = new Map<string, { role: JobRole; start: number; end: number }[]>()
+    for (let intervalStart = operatingStart; intervalStart < operatingEnd; intervalStart += 0.5) {
+      const intervalEnd = Math.min(intervalStart + 0.5, operatingEnd)
+      skillsByRole.forEach(({ role, skills }) => skills.forEach(skill => {
+        if (skill.includes('レジ締め') && role === 'ホール') return
+        const covered = shiftDetails.some(({ staff, range, role: assignedRole }) =>
+          assignedRole === role
+          && Boolean(range && range.start <= intervalStart && range.end >= intervalEnd)
+          && Boolean(staff.skills?.includes(skill))
+        )
+        if (covered) return
+        const ranges = missingIntervals.get(skill) || []
+        const previous = ranges[ranges.length - 1]
+        if (previous && previous.role === role && Math.abs(previous.end - intervalStart) < 0.001) previous.end = intervalEnd
+        else ranges.push({ role, start: intervalStart, end: intervalEnd })
+        missingIntervals.set(skill, ranges)
+      }))
+    }
+
+    const grouped = new Map<string, { role: JobRole; start: number; end: number; skills: string[] }>()
+    missingIntervals.forEach((ranges, skill) => ranges.forEach(({ role, start, end }) => {
+      const key = `${role}-${start}-${end}`
+      const entry = grouped.get(key) || { role, start, end, skills: [] }
+      entry.skills.push(skill)
+      grouped.set(key, entry)
+    }))
+    grouped.forEach(({ role, start, end, skills }, index) => {
+      const day = Number(date.slice(-2))
+      alerts.push({
+        id: `${date}-skills-${index}`,
+        type: 'skill',
+        message: `${targetMonth}/${String(day).padStart(2, '0')} ${formatAlertTime(start)}-${formatAlertTime(end)} ${role}: スキル不足 (${skills.join(', ')})`,
+      })
+    })
+
+    const closingSkill = skillOptions.find(skill => skill.includes('レジ締め') && !skill.startsWith('[K]'))
+    const lastHallEnd = requirements
+      .filter(requirement => requirement.role === 'ホール')
+      .reduce((latestEnd, requirement) => Math.max(latestEnd, requirement.end), Number.NEGATIVE_INFINITY)
+    if (closingSkill && Number.isFinite(lastHallEnd)) {
+      const hasClosingStaff = shiftDetails.some(({ staff, range, role }) =>
+        role === 'ホール'
+        && Boolean(range && range.start <= lastHallEnd && range.end >= lastHallEnd)
+        && Boolean(staff.skills?.some(skill => skill.replace(/^\[H\]\s*/, '').includes('レジ締め')))
+      )
+      if (!hasClosingStaff) {
+        const day = Number(date.slice(-2))
+        alerts.push({
+          id: `${date}-skills-register-closing`,
+          type: 'skill',
+          message: `${targetMonth}/${String(day).padStart(2, '0')} ラスト スキル不足 (${closingSkill.startsWith('[H]') ? closingSkill : `[H]${closingSkill}`})`,
+        })
+      }
+    }
+  })
+
+  return alerts
+}
+
 const DATE_COL_CLASS = 'w-[104px] min-w-[104px] max-w-[104px]'
 const STAFF_COL_CLASS = 'sticky left-0 w-[148px] min-w-[148px] max-w-[148px] border-r border-slate-200 shadow-[2px_0_6px_-3px_rgba(15,23,42,0.18)]'
 const SUMMARY_COL_CLASS = 'sticky right-0 w-[132px] min-w-[132px] border-l border-slate-200 shadow-[-2px_0_6px_-3px_rgba(15,23,42,0.18)]'
 
-const fulfillmentPercent = (assignedDays: number, weeklyTargetDays?: number) => {
-  if (!weeklyTargetDays || weeklyTargetDays <= 0) return null
-  const targetDays = weeklyTargetDays * WEEKS_PER_MONTH
+const fulfillmentPercent = (
+  assignedDays: number,
+  weeklyTargetDays: number | undefined,
+  daysInMonth: number,
+  assignedHours: number,
+  monthlyTargetHours?: number
+) => {
+  if (monthlyTargetHours && monthlyTargetHours > 0) {
+    return Math.round((assignedHours / monthlyTargetHours) * 100)
+  }
+  if (!weeklyTargetDays || weeklyTargetDays <= 0 || daysInMonth <= 0) return null
+  const targetDays = (weeklyTargetDays / 7) * daysInMonth
   if (targetDays <= 0) return null
   return Math.round((assignedDays / targetDays) * 100)
 }
@@ -236,6 +403,8 @@ export default function GeneratePage() {
   const [draftAction, setDraftAction] = useState<'save' | 'discard' | 'confirm' | null>(null)
   const [monthlyTargetHours, setMonthlyTargetHours] = useState<number>(168)
   const [activeCell, setActiveCell] = useState<ActiveShiftCell | null>(null)
+  const [weekIndex, setWeekIndex] = useState(0)
+  const [scheduleView, setScheduleView] = useState<'week' | 'month'>('week')
   const closeShiftEditor = useCallback(() => setActiveCell(null), [])
 
   const minTime = useMemo(() => tToF(storeInfo?.open_time), [storeInfo])
@@ -347,6 +516,14 @@ export default function GeneratePage() {
 
   const daysInMonth = new Date(targetYear, targetMonth, 0).getDate()
   const firstDay = new Date(targetYear, targetMonth - 1, 1).getDay()
+  const currentScheduleAlerts = useMemo(
+    () => generatedSchedule ? calculateScheduleAlerts(generatedSchedule, targetMonth) : [],
+    [generatedSchedule, targetMonth]
+  )
+  const currentVacancyCount = currentScheduleAlerts.filter(alert => alert.type === 'vacancy').length
+  const sortedGeneratedStaff = generatedSchedule
+    ? [...generatedSchedule.staff].sort(compareStaffOrder)
+    : []
 
   useEffect(() => {
     loadAllSettings()
@@ -354,6 +531,7 @@ export default function GeneratePage() {
 
   const changeMonth = (diff: number) => {
     setViewDate(new Date(targetYear, targetMonth - 1 + diff, 1))
+    setWeekIndex(0)
     setGeneratedSchedule(null)
   }
 
@@ -431,7 +609,7 @@ export default function GeneratePage() {
       const c = currentTabCounts[g] || 0
       for (let i = 0; i < c; i++) {
         const s = currentTabSlots[`${g}_${i}`] || { start: 10, end: 18 }
-        total += (s.end - s.start)
+        total += calculateActualHours(s.start, s.end)
       }
     })
     return total
@@ -493,7 +671,7 @@ export default function GeneratePage() {
         console.error('日付要望のAI解析に失敗しました。', error)
         const staffName = staffNames.get(request.staff_id || '') || 'スタッフ'
         const day = Number(request.date?.slice(-2) || 0)
-        analysisWarnings.push(`⚠️ ${staffName}さんの${day || '対象'}日の要望解析に失敗したため、基本条件で生成しました。生成後に手動でご確認ください。`)
+        analysisWarnings.push(`${staffName}さんの${day || '対象'}日の要望解析に失敗したため、基本条件で生成しました。生成後に手動でご確認ください。`)
       }
     }
     setRequestAnalysisWarning(analysisWarnings.join(' '))
@@ -510,25 +688,24 @@ export default function GeneratePage() {
     const scheduleStaff: GeneratedStaffShift[] = staffList.map(staff => ({
       id: staff.id,
       name: staff.name,
-      mainJob: staff.main_job || '未設定',
-      jobOptions: getJobOptions(staff.main_job, staff.possible_groups),
+      mainJob: staff.main_job || staff.role || '未設定',
+      jobOptions: getJobOptions(staff.main_job || staff.role, staff.possible_groups),
       isEmployee: Boolean(staff.is_employee),
       employmentType: staff.is_employee ? '社員' : 'アルバイト',
       shifts: {},
+      assignedRoles: {},
+      skills: (staff.skills || '').split(',').map(skill => skill.trim()).filter(Boolean),
       assignedDays: 0,
       assignedHours: 0,
-      weeklyTargetDays: staff.weekly_target_days ?? undefined,
+      weeklyTargetDays: staff.target_work_days ?? staff.weekly_target_days ?? undefined,
+      monthlyTargetHours: staff.monthly_target_hours ?? (staff.is_employee ? monthlyTargetHours : undefined),
     }))
-    let vacancyCount = 0
     let assignedHours = 0
-    const alerts: ScheduleAlert[] = []
     const consecutiveDays = new Map(staffList.map(staff => [staff.id, 0]))
     const skillOptions = parseSkillOptions(storeInfo.skill_options)
-    const hallSkills = skillOptions.filter((skill: string) => skill.startsWith('[H]'))
-    const kitchenSkills = skillOptions.filter((skill: string) => skill.startsWith('[K]'))
     const assignmentsByDate = new Map<string, {
       shifts: { staffId: string; start: number; end: number; skills: string[]; job: 'ホール' | 'キッチン' | null; slotKey: string }[]
-      slots: { group: string; slotIndex: number; start: number; end: number; assigned: boolean; staffId: string | null }[]
+      slots: { group: string; slotIndex: number; start: number; end: number; assigned: boolean; staffId: string | null; relayStaffIds: string[] }[]
       assignedStaffIds: Set<string>
     }>()
 
@@ -549,28 +726,30 @@ export default function GeneratePage() {
       })
 
       const dailyShifts: { staffId: string; start: number; end: number; skills: string[]; job: 'ホール' | 'キッチン' | null; slotKey: string }[] = []
-      const dailySlots: { group: string; slotIndex: number; start: number; end: number; assigned: boolean; staffId: string | null }[] = []
+      const dailySlots: { group: string; slotIndex: number; start: number; end: number; assigned: boolean; staffId: string | null; relayStaffIds: string[] }[] = []
 
       for (const group of groups) {
         const count = Math.max(0, counts[configType]?.[group] || 0)
         for (let slotIndex = 0; slotIndex < count; slotIndex++) {
           const slot = slots[configType]?.[`${group}_${slotIndex}`] || { start: 10, end: 18 }
           const slotEnd = slot.end < slot.start ? slot.end + 24 : slot.end
-          const dailySlot = { group, slotIndex, start: slot.start, end: slotEnd, assigned: false, staffId: null as string | null }
+          const dailySlot = { group, slotIndex, start: slot.start, end: slotEnd, assigned: false, staffId: null as string | null, relayStaffIds: [] as string[] }
           dailySlots.push(dailySlot)
-          const candidates: { index: number; priority: number; score: number }[] = []
+          const candidates: { index: number; priority: number; score: number; start: number; end: number }[] = []
 
           staffList.forEach((staff, index) => {
             const request = requestMap[`${staff.id}_${dateStr}`]
             if (isRequestUnavailable(request) || dailyAssignments.has(staff.id)) return
+            if (staff.is_employee && scheduleStaff[index].assignedDays >= 22) return
 
             const possibleGroups = (staff.possible_groups || '').split(',').map(value => value.trim()).filter(Boolean)
             const groupJob = jobForGroup(group)
-            const matchesJob = staff.main_job === group
+            const mainJob = staff.main_job || staff.role
+            const matchesJob = mainJob === group
               || possibleGroups.includes(group)
               || Boolean(groupJob && (
-                staff.main_job === groupJob
-                || staff.main_job === '共通'
+                mainJob === groupJob
+                || mainJob === '共通'
                 || possibleGroups.includes(groupJob)
               ))
             if (!matchesJob) return
@@ -586,21 +765,58 @@ export default function GeneratePage() {
                   ...(workRange2 ? [{ range: workRange2, priority: 1 }] : []),
                   ...(!hasStaffTimeRange && storeRange ? [{ range: storeRange, priority: 2 }] : []),
                 ]
-            const matchingRange = availableRanges.find(({ range }) =>
-              range.start <= slot.start && range.end >= slotEnd
-            )
+            const matchingRange = availableRanges
+              .map(({ range, priority }) => {
+                const start = Math.max(slot.start, range.start)
+                const end = Math.min(slotEnd, range.end)
+                const shortfall = (slotEnd - slot.start) - Math.max(0, end - start)
+                return { start, end, priority, shortfall }
+              })
+              .filter(range => range.end > range.start && range.shortfall <= 2)
+              .sort((left, right) => left.shortfall - right.shortfall || left.priority - right.priority)[0]
             if (matchingRange) {
-              const targetRate = ((staff.weekly_target_days || 0) * 4) / daysInMonth
+              const targetRate = ((staff.target_work_days ?? staff.weekly_target_days ?? 0) * 4) / daysInMonth
               const previousDays = day - 1
               const currentRate = previousDays > 0 ? scheduleStaff[index].assignedDays / previousDays : 0
               const attendanceScore = (targetRate - currentRate) * 100
+              const rescueBoostScore = targetRate > 0 && currentRate < targetRate * 0.5 ? 250 : 0
+              const targetMonthDays = ((staff.target_work_days ?? staff.weekly_target_days ?? 0) / 7) * daysInMonth
+              const excessWorkDays = targetMonthDays > 0
+                ? Math.max(0, scheduleStaff[index].assignedDays + 1 - targetMonthDays)
+                : 0
+              const overTargetPenalty = excessWorkDays * -150
               const wouldReachThreeConsecutiveDays = (consecutiveDays.get(staff.id) || 0) + 1 >= 3
               const streakScore = wouldReachThreeConsecutiveDays ? -500 : 0
               const rankScore = staff.rank === 'A' ? 30 : staff.rank === 'B' ? 20 : 0
+              const assignedRankScores = dailyShifts
+                .filter(shift => shift.start < slotEnd && shift.end > slot.start)
+                .map(shift => {
+                  const assignedStaff = staffList.find(person => person.id === shift.staffId)
+                  return assignedStaff?.rank === 'A' ? 30 : assignedStaff?.rank === 'B' ? 20 : 0
+                })
+              const averageRankScore = assignedRankScores.length > 0
+                ? assignedRankScores.reduce<number>((total, score) => total + score, 0) / assignedRankScores.length
+                : 0
+              const rankMultiplier = averageRankScore < 20 ? 3 : 1
+              const rankAdjustedScore = rankScore * rankMultiplier
+              const timeShortfallPenalty = -Math.round(matchingRange.shortfall / 0.25) * 15
+              const date = new Date(`${dateStr}T00:00:00`)
+              const isWeekendOrHoliday = date.getDay() === 0 || date.getDay() === 6 || Boolean(HOLIDAYS[dateStr])
+              const previousWeekendShifts = isWeekendOrHoliday
+                ? Object.entries(scheduleStaff[index].shifts).filter(([assignedDate, assignedShift]) => {
+                    const assignedDay = new Date(`${assignedDate}T00:00:00`).getDay()
+                    return assignedDate < dateStr
+                      && shiftHoursFromLabel(assignedShift) > 0
+                      && (assignedDay === 0 || assignedDay === 6 || Boolean(HOLIDAYS[assignedDate]))
+                  }).length
+                : 0
+              const weekendFatiguePenalty = previousWeekendShifts * -30
               candidates.push({
                 index,
                 priority: matchingRange.priority,
-                score: attendanceScore + streakScore + rankScore,
+                start: matchingRange.start,
+                end: matchingRange.end,
+                score: attendanceScore + rescueBoostScore + overTargetPenalty + streakScore + rankAdjustedScore + timeShortfallPenalty + weekendFatiguePenalty,
               })
             }
           })
@@ -611,31 +827,29 @@ export default function GeneratePage() {
           const candidateIndex = candidates[0]?.index ?? -1
 
           if (candidateIndex < 0) {
-            vacancyCount++
-            alerts.push({
-              id: `${dateStr}-${group}-${slotIndex}-vacancy`,
-              type: 'vacancy',
-              message: `${targetMonth}/${String(day).padStart(2, '0')} ${formatAlertTime(slot.start)}-${formatAlertTime(slotEnd)} ${labelForGroup(group)} 1枠欠員`,
-            })
             continue
           }
 
+          const selectedCandidate = candidates[0]
+          if (!selectedCandidate) continue
           const assignedStaff = staffList[candidateIndex]
           const assignedRow = scheduleStaff[candidateIndex]
+          const assignedRole = jobForGroup(group)
           dailyAssignments.add(assignedStaff.id)
           dailySlot.assigned = true
           dailySlot.staffId = assignedStaff.id
           dailyShifts.push({
             staffId: assignedStaff.id,
-            start: slot.start,
-            end: slotEnd,
+            start: selectedCandidate.start,
+            end: selectedCandidate.end,
             skills: (assignedStaff.skills || '').split(',').map(skill => skill.trim()).filter(Boolean),
-            job: jobForGroup(group),
+            job: assignedRole,
             slotKey: `${group}_${slotIndex}`,
           })
-          assignedRow.shifts[dateStr] = `${fToT(slot.start)}-${fToT(slotEnd)}`
+          assignedRow.shifts[dateStr] = `${fToT(selectedCandidate.start)}-${fToT(selectedCandidate.end)}`
+          if (assignedRole) assignedRow.assignedRoles![dateStr] = assignedRole
           assignedRow.assignedDays++
-          const slotHours = Math.max(0, slotEnd - slot.start)
+          const slotHours = calculateActualHours(selectedCandidate.start, selectedCandidate.end)
           assignedRow.assignedHours += slotHours
           assignedHours += slotHours
         }
@@ -662,11 +876,12 @@ export default function GeneratePage() {
       if (isRequestUnavailable(request)) return false
       const possibleGroups = (staff.possible_groups || '').split(',').map(value => value.trim()).filter(Boolean)
       const job = jobForGroup(slot.group)
-      const matchesJob = staff.main_job === slot.group
+      const mainJob = staff.main_job || staff.role
+      const matchesJob = mainJob === slot.group
         || possibleGroups.includes(slot.group)
         || Boolean(job && (
-          staff.main_job === job
-          || staff.main_job === '共通'
+          mainJob === job
+          || mainJob === '共通'
           || possibleGroups.includes(job)
         ))
       if (!matchesJob) return false
@@ -678,6 +893,62 @@ export default function GeneratePage() {
       ].filter((range): range is TimeRange => range !== null)
       const availableRanges = requestedRange ? [requestedRange] : workRanges.length > 0 ? workRanges : storeRange ? [storeRange] : []
       return availableRanges.some(range => range.start <= slot.start && range.end >= slot.end)
+    }
+
+    for (const [dateStr, dayData] of assignmentsByDate) {
+      for (const targetSlot of dayData.slots) {
+        const role = jobForGroup(targetSlot.group)
+        if (!role) continue
+        const slotKey = `${targetSlot.group}_${targetSlot.slotIndex}`
+        const assignedShift = dayData.shifts.find(shift => shift.slotKey === slotKey)
+        const gaps = assignedShift
+          ? [
+              { start: targetSlot.start, end: Math.min(assignedShift.start, targetSlot.end) },
+              { start: Math.max(assignedShift.end, targetSlot.start), end: targetSlot.end },
+            ].filter(gap => gap.end - gap.start > 0.001)
+          : [{ start: targetSlot.start, end: targetSlot.end }]
+
+        for (const gap of gaps) {
+          const relayCandidates = dayData.shifts
+            .filter(shift => shift.job === role && shift.staffId !== assignedShift?.staffId)
+            .map(shift => {
+              const staffIndex = staffIndexById.get(shift.staffId)
+              const staff = staffIndex === undefined ? undefined : staffList[staffIndex]
+              const row = staffIndex === undefined ? undefined : scheduleStaff[staffIndex]
+              const ownSlot = dayData.slots.find(slot => slot.staffId === shift.staffId)
+              const extendsAfter = Math.abs(shift.end - gap.start) <= 0.001
+              const extendsBefore = Math.abs(shift.start - gap.end) <= 0.001
+              const conflictsWithAnotherSlot = dayData.slots.some(slot =>
+                slot !== targetSlot
+                && (slot.staffId === shift.staffId || slot.relayStaffIds.includes(shift.staffId))
+                && slot.start < gap.end
+                && slot.end > gap.start
+              )
+              if (
+                !staff
+                || !row
+                || !ownSlot
+                || (!extendsAfter && !extendsBefore)
+                || conflictsWithAnotherSlot
+              ) return null
+
+              const start = extendsBefore ? gap.start : shift.start
+              const end = extendsAfter ? gap.end : shift.end
+              if (!canWorkSlot(staff, dateStr, { group: ownSlot.group, start, end })) return null
+              return { staff, row, shift, start, end }
+            })
+            .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+            .sort((left, right) => left.staff.name.localeCompare(right.staff.name, 'ja') || left.staff.id.localeCompare(right.staff.id))
+
+          const relay = relayCandidates[0]
+          if (!relay) continue
+          relay.shift.start = relay.start
+          relay.shift.end = relay.end
+          relay.row.shifts[dateStr] = `${fToT(relay.start)}-${fToT(relay.end)}`
+          relay.row.assignedHours = actualHoursForShifts(relay.row.shifts)
+          if (!targetSlot.relayStaffIds.includes(relay.staff.id)) targetSlot.relayStaffIds.push(relay.staff.id)
+        }
+      }
     }
 
     while (true) {
@@ -722,24 +993,27 @@ export default function GeneratePage() {
             const partTimeRow = scheduleStaff[partTimeIndex]
             const employeeSkillSet = (employee.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
             const partTimeSkillSet = (partTimeStaff.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
-            const extraHours = (longerSlot.end - longerSlot.start) - (employeeSlot.end - employeeSlot.start)
             employeeShift.staffId = partTimeStaff.id
             employeeShift.skills = partTimeSkillSet
             employeeSlot.staffId = partTimeStaff.id
             partTimeShift.staffId = employee.id
             partTimeShift.skills = employeeSkillSet
             longerSlot.staffId = employee.id
-            employeeRow.assignedHours += extraHours
-            partTimeRow.assignedHours -= extraHours
             employeeRow.shifts[dateStr] = `${fToT(longerSlot.start)}-${fToT(longerSlot.end)}`
             partTimeRow.shifts[dateStr] = `${fToT(employeeSlot.start)}-${fToT(employeeSlot.end)}`
+            employeeRow.assignedHours = actualHoursForShifts(employeeRow.shifts)
+            partTimeRow.assignedHours = actualHoursForShifts(partTimeRow.shifts)
+            employeeRow.assignedRoles ??= {}
+            partTimeRow.assignedRoles ??= {}
+            if (employeeShift.job) employeeRow.assignedRoles[dateStr] = employeeShift.job
+            if (partTimeShift.job) partTimeRow.assignedRoles[dateStr] = partTimeShift.job
             employeeProgress = true
             break
           }
           if (employeeProgress) break
         }
 
-        if (!employeeProgress) {
+        if (!employeeProgress && employeeRow.assignedDays < 22) {
           for (const [dateStr, dayData] of assignmentsByDate) {
             if (dayData.assignedStaffIds.has(employee.id)) continue
             const partTimeSlots = dayData.slots
@@ -748,7 +1022,7 @@ export default function GeneratePage() {
                 const index = staffIndexById.get(slot.staffId || '')
                 const staff = index === undefined ? undefined : staffList[index]
                 const row = index === undefined ? undefined : scheduleStaff[index]
-                const monthlyTargetDays = (staff?.weekly_target_days || 0) * daysInMonth / 7
+                const monthlyTargetDays = (staff?.target_work_days ?? staff?.weekly_target_days ?? 0) * daysInMonth / 7
                 return { slot, staff, row, daysAtTarget: Boolean(row && monthlyTargetDays > 0 && row.assignedDays >= monthlyTargetDays) }
               })
               .filter((candidate): candidate is typeof candidate & { staff: StaffRecord; row: GeneratedStaffShift } =>
@@ -760,18 +1034,22 @@ export default function GeneratePage() {
               if (!canWorkSlot(employee, dateStr, slot)) continue
               const shift = dayData.shifts.find(item => item.slotKey === `${slot.group}_${slot.slotIndex}`)
               if (!shift) continue
-              const slotHours = slot.end - slot.start
               shift.staffId = employee.id
               shift.skills = (employee.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
               slot.staffId = employee.id
               dayData.assignedStaffIds.delete(partTimeStaff.id)
               dayData.assignedStaffIds.add(employee.id)
               partTimeRow.assignedDays--
-              partTimeRow.assignedHours -= slotHours
               delete partTimeRow.shifts[dateStr]
+              partTimeRow.assignedHours = actualHoursForShifts(partTimeRow.shifts)
+              if (partTimeRow.assignedRoles) delete partTimeRow.assignedRoles[dateStr]
               employeeRow.assignedDays++
-              employeeRow.assignedHours += slotHours
               employeeRow.shifts[dateStr] = `${fToT(slot.start)}-${fToT(slot.end)}`
+              employeeRow.assignedHours = actualHoursForShifts(employeeRow.shifts)
+              if (shift.job) {
+                employeeRow.assignedRoles ??= {}
+                employeeRow.assignedRoles[dateStr] = shift.job
+              }
               employeeProgress = true
               break
             }
@@ -798,16 +1076,24 @@ export default function GeneratePage() {
             if (extensionRanges.length === 0) continue
             const availableEnd = Math.min(
               storeRange?.end ?? maxTime,
-              slot.start + maxShiftHours,
+              shift.start + maxShiftHours,
               Math.max(...extensionRanges.map(range => range.end))
             )
-            const extraHours = Math.min(availableEnd - shift.end, employeeTarget(employee) - employeeRow.assignedHours)
-            if (extraHours <= 0) continue
-            shift.end += extraHours
-            slot.end += extraHours
-            employeeRow.assignedHours += extraHours
-            assignedHours += extraHours
+            const currentShiftHours = calculateActualHours(shift.start, shift.end)
+            const otherShiftHours = employeeRow.assignedHours - currentShiftHours
+            let lowerEnd = shift.end
+            let upperEnd = availableEnd
+            for (let attempt = 0; attempt < 32; attempt++) {
+              const candidateEnd = (lowerEnd + upperEnd) / 2
+              const candidateHours = otherShiftHours + calculateActualHours(shift.start, candidateEnd)
+              if (candidateHours <= employeeTarget(employee)) lowerEnd = candidateEnd
+              else upperEnd = candidateEnd
+            }
+            if (lowerEnd - shift.end <= 0.01) continue
+            shift.end = lowerEnd
+            slot.end = Math.max(slot.end, lowerEnd)
             employeeRow.shifts[dateStr] = `${fToT(shift.start)}-${fToT(shift.end)}`
+            employeeRow.assignedHours = actualHoursForShifts(employeeRow.shifts)
             employeeProgress = true
             break
           }
@@ -821,70 +1107,35 @@ export default function GeneratePage() {
       if (!progress) break
     }
 
-    const vacancyAlerts = alerts.filter(alert => alert.type === 'vacancy')
-    alerts.splice(0, alerts.length, ...vacancyAlerts)
-    assignmentsByDate.forEach((dayData, dateStr) => {
-      const missingIntervals = new Map<string, { job: 'ホール' | 'キッチン'; start: number; end: number }[]>()
-      const operatingStart = storeRange?.start ?? minTime
-      const operatingEnd = storeRange?.end ?? maxTime
-      for (let intervalStart = operatingStart; intervalStart < operatingEnd; intervalStart += 0.5) {
-        const intervalEnd = Math.min(intervalStart + 0.5, operatingEnd)
-        const requiredSkillsByJob: { job: 'ホール' | 'キッチン'; skills: string[] }[] = [
-          { job: 'ホール', skills: hallSkills },
-          { job: 'キッチン', skills: kitchenSkills },
-        ]
-        for (const { job, skills: requiredSkills } of requiredSkillsByJob) {
-          requiredSkills.forEach((skill: string) => {
-            if (skill.includes('レジ締め') && job === 'ホール') return
-            const covered = dayData.shifts.some(shift =>
-              shift.job === job && shift.start <= intervalStart && shift.end >= intervalEnd && shift.skills.includes(skill)
-            )
-            if (covered) return
-            const ranges = missingIntervals.get(skill) || []
-            const previous = ranges[ranges.length - 1]
-            if (previous && previous.job === job && Math.abs(previous.end - intervalStart) < 0.001) previous.end = intervalEnd
-            else ranges.push({ job, start: intervalStart, end: intervalEnd })
-            missingIntervals.set(skill, ranges)
-          })
-        }
-      }
-      const dateDay = Number(dateStr.slice(-2))
-      const grouped = new Map<string, { job: 'ホール' | 'キッチン'; start: number; end: number; skills: string[] }>()
-      missingIntervals.forEach((ranges, skill) => ranges.forEach(({ job, start, end }) => {
-        const key = `${job}-${start}-${end}`
-        const entry = grouped.get(key) || { job, start, end, skills: [] }
-        entry.skills.push(skill)
-        grouped.set(key, entry)
-      }))
-      grouped.forEach(({ job, start, end, skills }, index) => alerts.push({
-        id: `${dateStr}-skills-${index}`,
-        type: 'skill',
-        message: `${targetMonth}/${String(dateDay).padStart(2, '0')} ${formatAlertTime(start)}-${formatAlertTime(end)} ${job}: スキル不足 (${skills.join(', ')})`,
-      }))
-
-      const closingSkill = skillOptions.find((skill: string) => skill.includes('レジ締め') && !skill.startsWith('[K]'))
-      if (closingSkill) {
-        const lastHallEnd = dayData.slots
-          .filter(slot => jobForGroup(slot.group) === 'ホール')
-          .reduce((latestEnd, slot) => Math.max(latestEnd, slot.end), Number.NEGATIVE_INFINITY)
-        const hasClosingStaff = dayData.shifts.some(shift =>
-          shift.job === 'ホール' && shift.end >= lastHallEnd
-          && shift.skills.some(skill => skill.replace(/^\[H\]\s*/, '').includes('レジ締め'))
-        )
-        if (Number.isFinite(lastHallEnd) && !hasClosingStaff) {
-          alerts.push({
-            id: `${dateStr}-skills-register-closing`,
-            type: 'skill',
-            message: `${targetMonth}/${String(dateDay).padStart(2, '0')} ラスト スキル不足 (${closingSkill.startsWith('[H]') ? closingSkill : `[H]${closingSkill}`})`,
-          })
-        }
-      }
+    scheduleStaff.forEach(staff => {
+      staff.assignedHours = actualHoursForShifts(staff.shifts)
     })
-
-    scheduleStaff.sort((left, right) =>
-      Number(right.isEmployee) - Number(left.isEmployee) || left.name.localeCompare(right.name, 'ja')
-    )
-    setGeneratedSchedule({ staff: scheduleStaff, vacancyCount, assignedHours, alerts })
+    assignedHours = scheduleStaff.reduce((total, staff) => total + staff.assignedHours, 0)
+    scheduleStaff.sort(compareStaffOrder)
+    const requirements = Object.fromEntries([...assignmentsByDate].map(([date, dayData]) => [
+      date,
+      dayData.slots.map(slot => ({
+        id: `${slot.group}_${slot.slotIndex}`,
+        group: slot.group,
+        role: jobForGroup(slot.group),
+        start: slot.start,
+        end: slot.end,
+        staffId: slot.staffId,
+        staffIds: [slot.staffId, ...slot.relayStaffIds].filter((staffId): staffId is string => Boolean(staffId)),
+      })),
+    ]))
+    const schedule: GeneratedSchedule = {
+      staff: scheduleStaff,
+      vacancyCount: 0,
+      assignedHours,
+      alerts: [],
+      requirements,
+      skillOptions,
+      operatingHours: storeRange || { start: minTime, end: maxTime },
+    }
+    schedule.alerts = calculateScheduleAlerts(schedule, targetMonth)
+    schedule.vacancyCount = schedule.alerts.filter(alert => alert.type === 'vacancy').length
+    setGeneratedSchedule(schedule)
   }
 
   const handleGenerate = async () => {
@@ -907,7 +1158,11 @@ export default function GeneratePage() {
         store_id: storeId,
         target_month: targetMonthStr,
         status: 'draft',
-        schedule_data: generatedSchedule,
+        schedule_data: {
+          ...generatedSchedule,
+          alerts: currentScheduleAlerts,
+          vacancyCount: currentVacancyCount,
+        },
       }, { onConflict: 'store_id,target_month' })
       if (error) throw error
       setIsDraftEdit(true)
@@ -927,7 +1182,7 @@ export default function GeneratePage() {
       const staff = current.staff.map(person => {
         if (person.id !== staffId) return person
         const shifts = { ...person.shifts, [date]: value }
-        const assignedHours = Object.values(shifts).reduce((total, shift) => total + shiftHoursFromLabel(shift), 0)
+        const assignedHours = actualHoursForShifts(shifts)
         const assignedDays = Object.values(shifts).filter(shift => shiftHoursFromLabel(shift) > 0).length
         return { ...person, shifts, assignedHours, assignedDays }
       })
@@ -936,15 +1191,21 @@ export default function GeneratePage() {
     })
   }
 
-  const toggleDraftStaffJob = (staffId: string) => {
+  const toggleDraftShiftRole = (staffId: string, date: string) => {
     setGeneratedSchedule(current => {
       if (!current) return current
       return {
         ...current,
         staff: current.staff.map(person => {
-          if (person.id !== staffId || !person.jobOptions || person.jobOptions.length < 2) return person
-          const currentIndex = Math.max(0, person.jobOptions.indexOf(person.mainJob))
-          return { ...person, mainJob: person.jobOptions[(currentIndex + 1) % person.jobOptions.length] }
+          if (
+            person.id !== staffId
+            || !isMultiRoleStaff(person)
+            || shiftHoursFromLabel(person.shifts[date] || '') <= 0
+          ) return person
+          const assignedRoles = { ...person.assignedRoles }
+          const currentRole = assignedRoles[date] || 'ホール'
+          assignedRoles[date] = currentRole === 'ホール' ? 'キッチン' : 'ホール'
+          return { ...person, assignedRoles }
         }),
       }
     })
@@ -961,7 +1222,11 @@ export default function GeneratePage() {
         store_id: currentStoreId,
         target_month: targetMonthStr,
         status: 'draft',
-        schedule_data: generatedSchedule,
+        schedule_data: {
+          ...generatedSchedule,
+          alerts: currentScheduleAlerts,
+          vacancyCount: currentVacancyCount,
+        },
       }, { onConflict: 'store_id,target_month' })
       if (error) throw error
       setDraftNotice('下書きを保存しました')
@@ -1006,7 +1271,11 @@ export default function GeneratePage() {
         store_id: currentStoreId,
         target_month: targetMonthStr,
         status: 'confirmed',
-        schedule_data: generatedSchedule,
+        schedule_data: {
+          ...generatedSchedule,
+          alerts: currentScheduleAlerts,
+          vacancyCount: currentVacancyCount,
+        },
       }, { onConflict: 'store_id,target_month' })
       if (error) throw error
       alert('シフトを確定・公開しました！')
@@ -1023,8 +1292,24 @@ export default function GeneratePage() {
     const editDates = Array.from({ length: daysInMonth }, (_, index) =>
       `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(index + 1).padStart(2, '0')}`
     )
+    const firstOfMonth = new Date(targetYear, targetMonth - 1, 1)
+    const firstWeekOffset = (firstOfMonth.getDay() + 6) % 7
+    const firstWeekStart = new Date(targetYear, targetMonth - 1, 1 - firstWeekOffset)
+    const weekCount = Math.ceil((daysInMonth + firstWeekOffset) / 7)
+    const currentWeekIndex = Math.min(weekIndex, weekCount - 1)
+    const selectedWeekStart = new Date(firstWeekStart)
+    selectedWeekStart.setDate(firstWeekStart.getDate() + currentWeekIndex * 7)
+    const weekDates = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(selectedWeekStart)
+      date.setDate(selectedWeekStart.getDate() + index)
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    })
+    const visibleDates = scheduleView === 'week' ? weekDates : editDates
+    const weekEnd = new Date(selectedWeekStart)
+    weekEnd.setDate(selectedWeekStart.getDate() + 6)
+    const formatShortDate = (date: Date) => `${date.getMonth() + 1}月${date.getDate()}日`
     const dailyHours = Object.fromEntries(editDates.map(date => [date,
-      generatedSchedule.staff.reduce((total, staff) => total + shiftHoursFromLabel(staff.shifts[date] || ''), 0),
+      sortedGeneratedStaff.reduce((total, staff) => total + shiftHoursFromLabel(staff.shifts[date] || ''), 0),
     ])) as Record<string, number>
     const presets = Array.from(new Set([
       ...Object.values(slots).flatMap(daySlots => Object.values(daySlots).map(slot => `${fToT(slot.start)}-${fToT(slot.end)}`)),
@@ -1032,6 +1317,7 @@ export default function GeneratePage() {
     ])).sort((left, right) => tToF(left.split('-')[0]) - tToF(right.split('-')[0])).slice(0, 10)
     const activateShiftCell = (staffId: string, date: string, mode: 'quick' | 'detail') => {
       setActiveCell(current => {
+        if (current?.staffId === staffId && current.date === date) return null
         if (mode === 'quick' && current?.mode === 'detail' && (current.staffId !== staffId || current.date !== date)) return current
         return { staffId, date, mode }
       })
@@ -1062,55 +1348,139 @@ export default function GeneratePage() {
         {(draftError || confirmError) && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{draftError || confirmError}</p>}
 
         <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-600">
-          <span>スタッフ {generatedSchedule.staff.length}名</span>
+          <span>スタッフ {sortedGeneratedStaff.length}名</span>
           <span>合計人時 <strong className="font-semibold text-slate-900">{generatedSchedule.assignedHours.toFixed(1)}h</strong></span>
-          <span>欠員 {generatedSchedule.vacancyCount}枠</span>
+          <span>欠員 {currentVacancyCount}枠</span>
         </div>
 
-        <div className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-slate-200 bg-white shadow-sm">
-          <table className="w-max border-separate border-spacing-0 text-xs">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <button type="button" onClick={() => setWeekIndex(index => Math.max(0, index - 1))} disabled={scheduleView !== 'week' || currentWeekIndex === 0} aria-label="前の週" className="inline-flex h-8 items-center gap-1 rounded border border-slate-300 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30">
+              <ChevronLeft size={14} /> 前の週
+            </button>
+            <p className="min-w-[190px] text-center text-xs font-semibold tabular-nums text-slate-800">
+              第{currentWeekIndex + 1}週 ({formatShortDate(selectedWeekStart)} 〜 {formatShortDate(weekEnd)})
+            </p>
+            <button type="button" onClick={() => setWeekIndex(index => Math.min(weekCount - 1, index + 1))} disabled={scheduleView !== 'week' || currentWeekIndex >= weekCount - 1} aria-label="次の週" className="inline-flex h-8 items-center gap-1 rounded border border-slate-300 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-30">
+              次の週 <ChevronRight size={14} />
+            </button>
+          </div>
+          <div role="group" aria-label="表示期間" className="inline-flex rounded border border-slate-300 p-0.5">
+            {(['week', 'month'] as const).map(view => (
+              <button key={view} type="button" aria-pressed={scheduleView === view} onClick={() => setScheduleView(view)} className={`rounded px-2.5 py-1 text-xs font-medium ${scheduleView === view ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                {view === 'week' ? '1週間表示' : '全期間表示'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={`min-w-0 max-w-full rounded-lg border border-slate-200 bg-white shadow-sm ${scheduleView === 'week' ? 'overflow-x-hidden' : 'overflow-x-auto overscroll-x-contain'}`}>
+          <table className={`${scheduleView === 'week' ? 'w-full table-fixed' : 'w-max'} border-separate border-spacing-0 text-xs`}>
             <thead>
               <tr className="bg-slate-50 text-slate-600">
-                <th className={`${STAFF_COL_CLASS} z-30 border-b bg-slate-50 px-3 py-3 text-left font-semibold`}>スタッフ名</th>
-                {editDates.map(date => (
-                  <th key={date} className={`${DATE_COL_CLASS} border-b border-slate-200 px-1.5 py-2 text-center font-semibold ${dayTone(date)}`}>
+                <th className={`${STAFF_COL_CLASS} z-30 border-b bg-slate-50 px-2 py-1.5 text-left font-semibold`}>スタッフ名</th>
+                {visibleDates.map(date => {
+                  const inMonth = date.startsWith(`${targetYear}-${String(targetMonth).padStart(2, '0')}-`)
+                  const dateColumnClass = scheduleView === 'week' ? 'min-w-0 px-0.5' : DATE_COL_CLASS
+                  const dateAlerts = currentScheduleAlerts.filter(alert => alert.id.startsWith(`${date}-`))
+                  const vacancyCount = dateAlerts.filter(alert => alert.type === 'vacancy').length
+                  const skillAlerts = dateAlerts.filter(alert => alert.type === 'skill')
+                  return (
+                  <th key={date} className={`${dateColumnClass} border-b border-slate-200 py-1.5 text-center font-semibold ${inMonth ? dayTone(date) : 'text-slate-300'}`}>
                     <span className="block text-[13px] leading-none">{Number(date.slice(-2))}</span>
                     <span className="mt-0.5 block text-[10px] font-normal">{weekdayLabel(date)}</span>
-                    <span className="mt-1 block text-[10px] font-medium tabular-nums text-slate-500">{dailyHours[date].toFixed(1)}h</span>
+                    <span className="mt-0.5 block text-[10px] font-medium tabular-nums text-slate-500">{inMonth ? `${dailyHours[date].toFixed(1)}h` : ' '}</span>
+                    {inMonth && (vacancyCount > 0 || skillAlerts.length > 0) && (
+                      <span className="mt-1 flex max-h-14 flex-col gap-0.5 overflow-y-auto text-left font-medium">
+                        {vacancyCount > 0 && (
+                          <span className="rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[10px] leading-tight text-red-700">
+                            欠員 {vacancyCount}枠
+                          </span>
+                        )}
+                        {skillAlerts.map(alert => {
+                          const label = alert.message.includes('ラスト')
+                            ? 'ラスト レジ締め'
+                            : alert.message
+                              .replace(/^\d+\/\d+\s+/, '')
+                              .replace(/: スキル不足/, '')
+                              .replace(/[()]/g, '')
+                              .replace(/\[H\]|\[K\]/g, '')
+                              .replace(/(\d{2}):00-(\d{2}):00/, '$1-$2')
+                          return (
+                            <span key={alert.id} title={alert.message} className="rounded border border-red-200 bg-red-50 px-1 py-0.5 text-[10px] leading-tight text-red-700">
+                              {label}
+                            </span>
+                          )
+                        })}
+                      </span>
+                    )}
                   </th>
-                ))}
-                <th className={`${SUMMARY_COL_CLASS} z-30 border-b bg-slate-50 px-3 py-3 text-right font-semibold`}>月間集計</th>
+                )})}
+                <th className={`${SUMMARY_COL_CLASS} z-30 border-b bg-slate-50 px-2 py-1.5 text-right font-semibold`}>月間集計</th>
               </tr>
             </thead>
             <tbody>
-              {generatedSchedule.staff.map(staff => {
-                const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays)
+              {sortedGeneratedStaff.map(staff => {
+                const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays, daysInMonth, staff.assignedHours, staff.monthlyTargetHours)
+                const roleTone = staff.isEmployee || isMultiRoleStaff(staff)
+                  ? { cell: 'bg-slate-50 text-slate-800', tag: 'bg-slate-100 text-slate-600' }
+                  : staff.mainJob === 'ホール'
+                    ? { cell: 'bg-amber-50/40 text-slate-800', tag: 'bg-amber-100/60 text-amber-700' }
+                    : staff.mainJob === 'キッチン'
+                      ? { cell: 'bg-emerald-50/40 text-slate-800', tag: 'bg-emerald-100/60 text-emerald-700' }
+                      : { cell: 'bg-slate-50 text-slate-800', tag: 'bg-slate-100 text-slate-600' }
                 return (
                   <tr key={staff.id} className="text-slate-700">
-                    <th scope="row" className={`${STAFF_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-left font-medium`}>
-                      <span className="block truncate text-xs text-slate-800">{staff.name}</span>
-                      <span className="mt-0.5 block truncate text-[10px] text-slate-400">{staff.mainJob}</span>
+                    <th scope="row" className={`${STAFF_COL_CLASS} z-10 border-b px-2 py-1 text-left font-medium ${roleTone.cell}`}>
+                      <span className="block truncate text-xs">{staff.name}</span>
+                      <span className={`mt-0.5 inline-block max-w-full truncate rounded px-1 py-0.5 text-[9px] leading-none ${roleTone.tag}`}>{staff.mainJob}{staff.isEmployee ? ' · 社員' : ''}</span>
                     </th>
-                    {editDates.map(date => (
-                      <td key={date} className={`${DATE_COL_CLASS} border-b border-slate-100 px-1 py-1`}>
-                        <ShiftTimeEditor
-                          value={staff.shifts[date] || ''}
-                          minTime={minTime}
-                          maxTime={maxTime}
-                          presets={presets}
-                          isActive={activeCell?.staffId === staff.id && activeCell.date === date}
-                          mode={activeCell?.staffId === staff.id && activeCell.date === date ? activeCell.mode : 'quick'}
-                          onActivate={nextMode => activateShiftCell(staff.id, date, nextMode)}
-                          onDeactivate={closeShiftEditor}
-                          onChange={nextValue => updateDraftShift(staff.id, date, nextValue)}
-                        />
+                    {visibleDates.map(date => {
+                      const inMonth = date.startsWith(`${targetYear}-${String(targetMonth).padStart(2, '0')}-`)
+                      const dateColumnClass = scheduleView === 'week' ? 'min-w-0 px-0.5' : DATE_COL_CLASS
+                      const shiftValue = staff.shifts[date] || ''
+                      const assignedRole = staff.assignedRoles?.[date] || 'ホール'
+                      const showRoleToggle = isMultiRoleStaff(staff) && shiftHoursFromLabel(shiftValue) > 0
+                      return (
+                      <td key={date} className={`${dateColumnClass} border-b border-slate-100 py-0.5 ${inMonth ? '' : 'bg-slate-50/70'}`}>
+                        {inMonth ? (
+                          <div className="flex min-w-0 items-center gap-0.5">
+                            {showRoleToggle && (
+                              <button
+                                type="button"
+                                aria-label={`担当職種を${assignedRole}から${assignedRole === 'ホール' ? 'キッチン' : 'ホール'}に切り替え`}
+                                title="クリックして担当職種を切り替え"
+                                onClick={event => {
+                                  event.stopPropagation()
+                                  toggleDraftShiftRole(staff.id, date)
+                                }}
+                                className={`shrink-0 rounded border px-1 text-[10px] leading-5 ${assignedRole === 'ホール' ? 'border-amber-300 bg-amber-100 text-amber-800' : 'border-emerald-300 bg-emerald-100 text-emerald-800'}`}
+                              >
+                                {assignedRole === 'ホール' ? '[ホ]' : '[キ]'}
+                              </button>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <ShiftTimeEditor
+                                value={shiftValue}
+                                minTime={minTime}
+                                maxTime={maxTime}
+                                presets={presets}
+                                isActive={activeCell?.staffId === staff.id && activeCell.date === date}
+                                mode={activeCell?.staffId === staff.id && activeCell.date === date ? activeCell.mode : 'quick'}
+                                onActivate={nextMode => activateShiftCell(staff.id, date, nextMode)}
+                                onDeactivate={closeShiftEditor}
+                                onChange={nextValue => updateDraftShift(staff.id, date, nextValue)}
+                              />
+                            </div>
+                          </div>
+                        ) : <span aria-hidden="true" className="block h-8" />}
                       </td>
-                    ))}
-                    <td className={`${SUMMARY_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-right`}>
+                    )})}
+                    <td className={`${SUMMARY_COL_CLASS} z-10 border-b bg-white px-2 py-1 text-right`}>
                       <span className="block font-semibold tabular-nums text-slate-900">{staff.assignedHours.toFixed(1)}h</span>
                       <span className="mt-0.5 block text-[10px] tabular-nums text-slate-500">出勤 {staff.assignedDays}日</span>
                       <span className={`mt-0.5 block text-[10px] font-medium tabular-nums ${fulfillment !== null && fulfillment < 80 ? 'text-amber-700' : 'text-slate-600'}`}>
-                        充足率 {fulfillment === null ? '—' : `${fulfillment}%`}
+                        充足率 {fulfillment === null ? '―' : `${fulfillment}%`}
                       </span>
                     </td>
                   </tr>
@@ -1285,7 +1655,7 @@ export default function GeneratePage() {
                         </div>
                       </div>
                       <div className={`min-w-[70px] rounded-md border px-3 py-1.5 text-center text-sm font-bold ${color.border} ${color.bg} ${color.text}`}>
-                        {(end - start).toFixed(1)}h
+                        {calculateActualHours(start, end).toFixed(1)}h
                       </div>
                     </div>
                   )
@@ -1324,7 +1694,7 @@ export default function GeneratePage() {
                     {Array.from({ length: daysInMonth }, (_, index) => {
                       const day = index + 1
                       const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                      const dayAlerts = generatedSchedule.alerts.filter(alert => alert.id.startsWith(`${dateStr}-`))
+                      const dayAlerts = currentScheduleAlerts.filter(alert => alert.id.startsWith(`${dateStr}-`))
                       const dayVacancyCount = dayAlerts.filter(alert => alert.type === 'vacancy').length
                       const daySkillAlerts = dayAlerts.filter(alert => alert.type === 'skill')
                       const dayHours = generatedSchedule.staff.reduce((total, person) => total + shiftHoursFromLabel(person.shifts[dateStr] || ''), 0)
@@ -1362,8 +1732,8 @@ export default function GeneratePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {generatedSchedule.staff.map(staff => {
-                    const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays)
+                  {sortedGeneratedStaff.map(staff => {
+                    const fulfillment = fulfillmentPercent(staff.assignedDays, staff.weeklyTargetDays, daysInMonth, staff.assignedHours, staff.monthlyTargetHours)
                     return (
                     <tr key={staff.id} className="text-slate-700">
                       <th scope="row" className={`${STAFF_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-left font-bold`}>
@@ -1374,16 +1744,31 @@ export default function GeneratePage() {
                         const day = index + 1
                         const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
                         const shift = staff.shifts[dateStr] || ''
+                        const assignedRole = staff.assignedRoles?.[dateStr] || 'ホール'
+                        const showRoleToggle = isMultiRoleStaff(staff) && shiftHoursFromLabel(shift) > 0
                         return (
                           <td key={dateStr} className={`${DATE_COL_CLASS} border-b border-slate-100 px-1 py-2 text-center ${shift === '×' ? 'bg-red-50 font-bold text-red-500' : shift ? 'font-medium tabular-nums text-slate-700' : 'text-slate-300'}`}>
-                            <span className="block whitespace-nowrap">{shift || '—'}</span>
+                            <div className="flex items-center justify-center gap-1">
+                              {showRoleToggle && (
+                                <button
+                                  type="button"
+                                  aria-label={`担当職種を${assignedRole}から${assignedRole === 'ホール' ? 'キッチン' : 'ホール'}に切り替え`}
+                                  title="クリックして担当職種を切り替え"
+                                  onClick={() => toggleDraftShiftRole(staff.id, dateStr)}
+                                  className={`shrink-0 rounded border px-1 text-[10px] leading-5 ${assignedRole === 'ホール' ? 'border-amber-300 bg-amber-100 text-amber-800' : 'border-emerald-300 bg-emerald-100 text-emerald-800'}`}
+                                >
+                                  {assignedRole === 'ホール' ? '[ホ]' : '[キ]'}
+                                </button>
+                              )}
+                              <span className="block whitespace-nowrap">{shift || '—'}</span>
+                            </div>
                           </td>
                         )
                       })}
                       <td className={`${SUMMARY_COL_CLASS} z-10 border-b bg-white px-3 py-2 text-right`}>
                         <span className="block font-bold tabular-nums">{staff.assignedHours.toFixed(1)}h</span>
                         <span className="mt-0.5 block text-[10px] tabular-nums text-slate-500">出勤 {staff.assignedDays}日</span>
-                        <span className="mt-0.5 block text-[10px] font-medium tabular-nums text-slate-600">充足率 {fulfillment === null ? '—' : `${fulfillment}%`}</span>
+                        <span className="mt-0.5 block text-[10px] font-medium tabular-nums text-slate-600">充足率 {fulfillment === null ? '―' : `${fulfillment}%`}</span>
                       </td>
                     </tr>
                     )
