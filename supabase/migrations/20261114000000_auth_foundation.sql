@@ -27,6 +27,10 @@ comment on table public.auth_throttle is 'Server-only rate limit / lockout state
 alter table public.auth_throttle enable row level security;
 -- No policies on purpose: anon and authenticated must never read or write this table.
 revoke all on table public.auth_throttle from anon, authenticated;
+-- Newer Supabase projects no longer grant privileges on tables created via SQL
+-- automatically, so the service role (used only on the server) needs an explicit
+-- grant. auth_register_failure() runs with the caller's rights and relies on it too.
+grant select, insert, update, delete on table public.auth_throttle to service_role;
 
 -- Atomically records one failure for p_key and returns the lock expiry
 -- (null when the key is not locked after this failure).
