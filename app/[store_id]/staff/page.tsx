@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchStoreStaff } from '@/lib/admin-api-client'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
 import { formatParsedConditions } from '@/lib/parsed-conditions'
@@ -28,12 +29,9 @@ export default function StaffPage() {
     const fetchData = async () => {
       if (!storeId) return
       
-      const { data: staffData } = await supabase
-        .from('staff')
-        .select('*')
-        .eq('store_id', storeId)
-        .order('created_at', { ascending: true })
-      setStaff(staffData || [])
+      // Via the server so pin_hash never reaches the browser.
+      const staffData = await fetchStoreStaff(storeId, 'created_at').catch(() => [])
+      setStaff(staffData)
 
       const { data: storeData } = await supabase
         .from('stores')
@@ -61,13 +59,16 @@ export default function StaffPage() {
         work_start_2: null, // 初期値は空
         work_end_2: null
       }])
-      .select()
+      // Only the id comes back from the anon client; the full row is re-read on the server.
+      .select('id')
 
     if (error) alert('登録失敗: ' + error.message)
     else {
-      if (data?.[0]) {
-        setStaff([...staff, data[0]])
-        setNewStaffId(data[0].id)
+      const createdId = data?.[0]?.id
+      if (createdId) {
+        const refreshed = await fetchStoreStaff(storeId, 'created_at').catch(() => null)
+        if (refreshed) setStaff(refreshed)
+        setNewStaffId(String(createdId))
       }
       setNewName('')
     }

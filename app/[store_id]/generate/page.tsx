@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchStoreSettings, fetchStoreStaff } from '@/lib/admin-api-client'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
@@ -426,7 +427,7 @@ export default function GeneratePage() {
     setDraftError('')
 
     try {
-    const { data: sInfo } = await supabase.from('stores').select('*').eq('store_id', currentStoreId).single()
+    const sInfo = await fetchStoreSettings(currentStoreId)
     if (sInfo) setStoreInfo(sInfo)
 
     const { data: draftRow, error: draftFetchError } = await supabase
@@ -449,7 +450,7 @@ export default function GeneratePage() {
     }
 
     setIsDraftEdit(false)
-    const storeGroups = sInfo?.group_options?.split(',') || []
+    const storeGroups = typeof sInfo?.group_options === 'string' ? sInfo.group_options.split(',') : []
 
     const { data: currentSettings } = await supabase
       .from('generation_settings')
@@ -623,11 +624,7 @@ export default function GeneratePage() {
   const buildGeneratedSchedule = async () => {
     if (!store_id || !storeInfo) return
 
-    const { data: staffData } = await supabase
-      .from('staff')
-      .select('*')
-      .eq('store_id', store_id)
-      .order('name', { ascending: true })
+    const staffData = await fetchStoreStaff(Array.isArray(store_id) ? store_id[0] : store_id, 'name')
 
     const startDate = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
     const nextMonth = targetMonth === 12 ? 1 : targetMonth + 1
