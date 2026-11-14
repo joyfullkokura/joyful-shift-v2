@@ -20,7 +20,7 @@ import {
   UserRound,
 } from 'lucide-react'
 import { useAdmin } from '@/context/AdminContext'
-import { supabase } from '@/lib/supabase'
+import { getCleaningLogs, saveCleaningLogs } from '@/app/actions/cleaning'
 
 type AreaKey = '1' | '2' | '3' | '4' | '5' | '6' | '7'
 type Areas = Record<AreaKey, boolean>
@@ -154,22 +154,18 @@ export default function CleaningPage() {
         return
       }
 
-      const { data, error } = await supabase
-        .from('cleaning_logs')
-        .select('id, store_id, date, areas, worker_name, memo, is_confirmed, confirmed_at, created_at, updated_at')
-        .eq('store_id', storeId)
-        .in('date', sundayDates)
+      const result = await getCleaningLogs(storeId, sundayDates)
 
       if (!isCurrent) return
 
-      if (error) {
-        setLoadError(`清掃記録を読み込めませんでした: ${error.message}`)
+      if (!result.ok) {
+        setLoadError(`清掃記録を読み込めませんでした: ${result.error}`)
         setRecords(sundayDates.map(createInitialRecord))
         setIsLoading(false)
         return
       }
 
-      const rows = (data ?? []) as CleaningLogRow[]
+      const rows = result.data as CleaningLogRow[]
       const recordsByDate = new Map(rows.map(row => [row.date, row]))
       setRecords(sundayDates.map(date => {
         const row = recordsByDate.get(date)
@@ -220,7 +216,6 @@ export default function CleaningPage() {
     setLoadError('')
 
     const payloads = records.map(record => ({
-      store_id: storeId,
       date: record.date,
       areas: record.areas,
       worker_name: record.workerName.trim(),
@@ -229,12 +224,11 @@ export default function CleaningPage() {
       confirmed_at: record.isConfirmed ? record.confirmedAt ?? new Date().toISOString() : null,
     }))
 
-    const { error } = await supabase.from('cleaning_logs').upsert(payloads, {
-      onConflict: 'store_id,date',
-    })
+    // store_id is taken from the verified session on the server.
+    const result = await saveCleaningLogs(storeId, payloads)
 
-    if (error) {
-      setLoadError(`保存に失敗しました: ${error.message}`)
+    if (!result.ok) {
+      setLoadError(`保存に失敗しました: ${result.error}`)
     } else {
       setSaveMessage(`${records.length}件の清掃記録を保存しました。`)
     }

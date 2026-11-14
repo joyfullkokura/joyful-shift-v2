@@ -3,7 +3,8 @@
 import { startTransition, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { CalendarDays, ChevronLeft, ChevronRight, Printer, Users, Clock3, X } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { getConfirmedSchedule } from '@/app/actions/schedule'
+import { unwrap } from '@/lib/action-result'
 import { useAdmin } from '@/context/AdminContext'
 
 type ShiftStaff = {
@@ -99,22 +100,12 @@ export default function ViewShiftPage() {
       setIsLoading(true)
       setLoadError('')
       try {
-        const [storeResult, shiftResult] = await Promise.all([
-          supabase.from('stores').select('name').eq('store_id', storeId).maybeSingle(),
-          supabase
-            .from('monthly_shifts')
-            .select('*')
-            .eq('store_id', storeId)
-            .eq('target_month', targetMonthStr)
-            .eq('status', 'confirmed')
-            .maybeSingle(),
-        ])
-        if (shiftResult.error) throw shiftResult.error
-        const record = shiftResult.data as ConfirmedShiftRow | null
+        const { storeName: loadedStoreName, shift } = unwrap(await getConfirmedSchedule(storeId, targetMonthStr))
+        const record = shift as ConfirmedShiftRow | null
         const savedSchedule = record?.schedule_data ?? record?.schedule ?? record?.shifts
         startTransition(() => {
           if (!isCurrent) return
-          setStoreName(storeResult.data?.name || '')
+          setStoreName(loadedStoreName || '')
           setSchedule(isConfirmedSchedule(savedSchedule) ? savedSchedule : null)
           setHighlightedStaffId(currentStaff?.id || '')
           setIsLoading(false)
