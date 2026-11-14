@@ -6,8 +6,8 @@ import { useState, useEffect, ReactNode } from 'react'
 import { ArrowRight, CalendarDays, Eye, House, LogOut, Sparkles, Store, Users, ClipboardList, UserPlus, X } from 'lucide-react'
 import { useAdmin } from '@/context/AdminContext'
 import PinLoginModal from '@/components/PinLoginModal'
-import { supabase } from '@/lib/supabase'
 import { registerNewStaff } from '@/app/actions/auth'
+import { getUnreadNotificationCount } from '@/app/actions/dashboard'
 import type { LoginMember } from '@/lib/auth-types'
 import { TIME_OPTIONS } from '@/lib/staff-profile-options'
 
@@ -48,22 +48,10 @@ export default function StoreShell({ children, storeId, storeName, members, load
         if (isCurrent) setHasUnreadNotifications(false)
         return
       }
-      const query = isEmployee
-        ? supabase
-          .from('staff_requests')
-          .select('id', { count: 'exact', head: true })
-          .eq('store_id', storeId)
-          .eq('status', 'pending')
-        : supabase
-          .from('staff_requests')
-          .select('id', { count: 'exact', head: true })
-          .eq('store_id', storeId)
-          .eq('staff_id', currentStaff.id)
-          .eq('is_read_by_staff', false)
-          .neq('status', 'pending')
-      const { count, error } = await query
-      if (!isCurrent || error) return
-      setHasUnreadNotifications((count || 0) > 0)
+      // The server decides what counts (store-wide pending for admins, own results otherwise).
+      const result = await getUnreadNotificationCount(storeId)
+      if (!isCurrent || !result.ok) return
+      setHasUnreadNotifications(result.data > 0)
     }
     const refreshUnreadNotifications = () => { void loadUnreadNotifications() }
     void loadUnreadNotifications()

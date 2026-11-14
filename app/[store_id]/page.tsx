@@ -11,6 +11,7 @@ import {
   Edit3,
   FileCheck2,
   KeyRound,
+  LockKeyhole,
   Megaphone,
   Store,
   UserRoundPen,
@@ -18,10 +19,21 @@ import {
 import PinLoginModal from '@/components/PinLoginModal'
 import { useAdmin } from '@/context/AdminContext'
 import { resolvePinReset } from '@/app/actions/auth'
-import { supabase } from '@/lib/supabase'
+import {
+  getDashboard,
+  getMyDayOff,
+  markConditionRequestRead,
+  resolveConditionRequest as resolveConditionRequestAction,
+  resolveNewStaffRequest as resolveNewStaffRequestAction,
+  saveStoreNotice,
+  submitConditionChange as submitConditionChangeAction,
+  unlockStaffPin,
+  type LockedStaff,
+} from '@/app/actions/dashboard'
+import { unwrap } from '@/lib/action-result'
 import { parseSkillOptions } from '@/lib/skill-options'
-import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
 import { formatParsedConditions } from '@/lib/parsed-conditions'
+import { getConditionChangeDetails, getNewStaffRegistrationDetails, type ConditionChangeDetails } from '@/lib/staff-request-details'
 
 type SchedulePerson = {
   id: string
@@ -50,10 +62,6 @@ type PinResetRequest = {
   name: string
 }
 
-type ShiftRequest = {
-  is_off?: boolean | null
-}
-
 type StaffProfile = {
   id: string
   name: string
@@ -67,31 +75,6 @@ type StaffProfile = {
   work_end_2?: string | null
   is_employee?: boolean | null
   parsed_conditions?: unknown
-}
-
-type AvailableHours = {
-  start: string
-  end: string
-}
-
-type ConditionChangeDetails = {
-  weekly_target_days: number
-  main_job: string
-  memo: string
-  skills?: string[]
-  available_hours?: AvailableHours | null
-}
-
-type NewStaffRegistrationDetails = {
-  name: string
-  employment_type: string
-  main_job: string
-  weekly_target_days: number
-  work_start_1: string | null
-  work_end_1: string | null
-  work_start_2: string | null
-  work_end_2: string | null
-  memo: string
 }
 
 type StaffRequestRecord = {
@@ -157,48 +140,6 @@ const getShiftPosition = (shift: string) => {
   return { startPosition, endPosition }
 }
 
-const getConditionChangeDetails = (value: unknown): ConditionChangeDetails | null => {
-  if (!value || typeof value !== 'object') return null
-  const details = value as Partial<ConditionChangeDetails>
-  if (!(typeof details.weekly_target_days === 'number' &&
-    typeof details.main_job === 'string' &&
-    typeof details.memo === 'string')) return null
-  const skills = Array.isArray(details.skills) && details.skills.every(skill => typeof skill === 'string')
-    ? details.skills
-    : undefined
-  const hours = details.available_hours
-  const availableHours = hours === null
-    ? null
-    : hours && typeof hours === 'object' &&
-    typeof (hours as Partial<AvailableHours>).start === 'string' &&
-    typeof (hours as Partial<AvailableHours>).end === 'string'
-    ? hours as AvailableHours
-    : undefined
-  return { ...details, skills, available_hours: availableHours } as ConditionChangeDetails
-}
-
-const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistrationDetails | null => {
-  if (!value || typeof value !== 'object') return null
-  const details = value as Partial<NewStaffRegistrationDetails>
-  if (!(typeof details.name === 'string' &&
-    typeof details.employment_type === 'string' &&
-    typeof details.main_job === 'string' &&
-    typeof details.weekly_target_days === 'number')) return null
-
-  const nullableTime = (candidate: unknown) => typeof candidate === 'string' || candidate === null || candidate === undefined
-  if (!(nullableTime(details.work_start_1) && nullableTime(details.work_end_1) &&
-    nullableTime(details.work_start_2) && nullableTime(details.work_end_2))) return null
-
-  return {
-    ...details,
-    work_start_1: details.work_start_1 ?? null,
-    work_end_1: details.work_end_1 ?? null,
-    work_start_2: details.work_start_2 ?? null,
-    work_end_2: details.work_end_2 ?? null,
-    memo: typeof details.memo === 'string' ? details.memo : '',
-  } as NewStaffRegistrationDetails
-}
-
 export default function HomePage() {
   const { store_id } = useParams<{ store_id: string }>()
   const { currentStaff, login, isAdmin } = useAdmin()
@@ -230,6 +171,8 @@ export default function HomePage() {
   const [isSubmittingConditionRequest, setIsSubmittingConditionRequest] = useState(false)
   const [isResolvingConditionRequest, setIsResolvingConditionRequest] = useState<string | null>(null)
   const [isResolvingNewStaffRequest, setIsResolvingNewStaffRequest] = useState<string | null>(null)
+  const [lockedStaff, setLockedStaff] = useState<LockedStaff[]>([])
+  const [isUnlockingStaff, setIsUnlockingStaff] = useState<string | null>(null)
 
   const storeId = Array.isArray(store_id) ? store_id[0] : store_id
   const selectedDateKey = toDateKey(selectedDate)
@@ -243,69 +186,19 @@ export default function HomePage() {
       setIsLoading(true)
       setError('')
       try {
-        const [storeResult, shiftResult, resetRequestResult, profilesResult, conditionRequestResult, newStaffRequestResult] = await Promise.all([
-          supabase.from('stores').select('name, notice, skill_options').eq('store_id', storeId).maybeSingle(),
-          supabase
-            .from('monthly_shifts')
-            .select('schedule_data')
-            .eq('store_id', storeId)
-            .eq('target_month', targetMonth)
-            .eq('status', 'confirmed')
-            .order('created_at', { ascending: false })
-            .limit(1),
-          supabase
-            .from('staff')
-            .select('id, name')
-            .eq('store_id', storeId)
-            .eq('pin_reset_requested', true)
-            .order('name'),
-          supabase
-            .from('staff')
-            .select('id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, work_start_2, work_end_2, is_employee, parsed_conditions')
-            .eq('store_id', storeId)
-            .order('name'),
-          (isAdmin
-            ? supabase
-              .from('staff_requests')
-              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
-              .eq('store_id', storeId)
-              .eq('type', 'condition_change')
-            : supabase
-              .from('staff_requests')
-              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
-              .eq('store_id', storeId)
-              .eq('staff_id', currentStaff?.id || '')
-              .eq('type', 'condition_change')
-          ).order('created_at', { ascending: false }),
-          isAdmin
-            ? supabase
-              .from('staff_requests')
-              .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
-              .eq('store_id', storeId)
-              .eq('type', 'new_staff')
-              .eq('status', 'pending')
-              .order('created_at', { ascending: false })
-            : Promise.resolve({ data: [], error: null }),
-        ])
-        if (storeResult.error) throw storeResult.error
-        if (shiftResult.error) throw shiftResult.error
-        if (resetRequestResult.error) throw resetRequestResult.error
-        if (profilesResult.error) throw profilesResult.error
-        if (conditionRequestResult.error) throw conditionRequestResult.error
-        if (newStaffRequestResult.error) throw newStaffRequestResult.error
-        const store = storeResult.data as StoreRecord | null
-        const latestShift = shiftResult.data?.[0] as { schedule_data?: unknown } | undefined
-        const parsedSchedule = latestShift?.schedule_data
+        const dashboard = unwrap(await getDashboard(storeId, targetMonth))
+        const store = dashboard.store as StoreRecord | null
         if (!isCurrent) return
         setStoreName(store?.name || storeId)
         setSkillOptions(parseSkillOptions(store?.skill_options))
         setNotice(store?.notice || '現在の店内お知らせはありません。')
         setDraftNotice(store?.notice || '')
-        setSchedule(isScheduleData(parsedSchedule) ? parsedSchedule : null)
-        setPinResetRequests((resetRequestResult.data || []) as PinResetRequest[])
-        setStaffProfiles((profilesResult.data || []) as StaffProfile[])
-        setConditionRequests((conditionRequestResult.data || []) as StaffRequestRecord[])
-        setNewStaffRequests((newStaffRequestResult.data || []) as StaffRequestRecord[])
+        setSchedule(isScheduleData(dashboard.schedule) ? dashboard.schedule : null)
+        setPinResetRequests(dashboard.pinResetRequests as PinResetRequest[])
+        setStaffProfiles(dashboard.staffProfiles as StaffProfile[])
+        setConditionRequests(dashboard.conditionRequests as StaffRequestRecord[])
+        setNewStaffRequests(dashboard.newStaffRequests as StaffRequestRecord[])
+        setLockedStaff(dashboard.lockedStaff)
       } catch (caughtError) {
         if (isCurrent) setError(caughtError instanceof Error ? caughtError.message : 'ダッシュボードを読み込めませんでした。')
       } finally {
@@ -337,15 +230,9 @@ export default function HomePage() {
         setHasRequestedDayOff(false)
         return
       }
-      const { data, error: requestError } = await supabase
-        .from('shift_requests')
-        .select('is_off')
-        .eq('store_id', storeId)
-        .eq('staff_id', currentStaff.id)
-        .eq('date', selectedDateKey)
-        .maybeSingle()
-      if (!isCurrent || requestError) return
-      setHasRequestedDayOff(Boolean((data as ShiftRequest | null)?.is_off))
+      const result = await getMyDayOff(storeId, selectedDateKey)
+      if (!isCurrent || !result.ok) return
+      setHasRequestedDayOff(result.data)
     }
     void loadDayOffRequest()
     return () => { isCurrent = false }
@@ -386,12 +273,8 @@ export default function HomePage() {
     if (!isAdmin) return
     setIsSavingNotice(true)
     try {
-      const { error: updateError } = await supabase
-        .from('stores')
-        .update({ notice: draftNotice.trim() })
-        .eq('store_id', storeId)
-      if (updateError) throw updateError
-      setNotice(draftNotice.trim() || '現在の店舗からのお知らせはありません。')
+      const savedNotice = unwrap(await saveStoreNotice(storeId, draftNotice))
+      setNotice(savedNotice || '現在の店舗からのお知らせはありません。')
       setIsEditingNotice(false)
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'お知らせを保存できませんでした。')
@@ -419,6 +302,21 @@ export default function HomePage() {
     }
   }
 
+  const unlockStaff = async (staff: LockedStaff) => {
+    if (!isAdmin || isUnlockingStaff) return
+    setIsUnlockingStaff(staff.id)
+    setError('')
+    try {
+      unwrap(await unlockStaffPin(storeId, staff.id))
+      setLockedStaff(current => current.filter(item => item.id !== staff.id))
+      setSuccessMessage(`${staff.name}さんのロックを解除しました。`)
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'ロックを解除できませんでした。')
+    } finally {
+      setIsUnlockingStaff(null)
+    }
+  }
+
   const notifyRequestUpdate = () => {
     window.dispatchEvent(new Event('staff-request-updated'))
   }
@@ -441,19 +339,8 @@ export default function HomePage() {
           : null,
         memo: requestedMemo.trim(),
       }
-      const { data, error: insertError } = await supabase
-        .from('staff_requests')
-        .insert({
-          store_id: storeId,
-          staff_id: currentStaff.id,
-          type: 'condition_change',
-          details,
-          status: 'pending',
-        })
-        .select('id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at')
-        .single()
-      if (insertError) throw insertError
-      if (data) setConditionRequests(current => [data as StaffRequestRecord, ...current])
+      const created = unwrap(await submitConditionChangeAction(storeId, details))
+      setConditionRequests(current => [created as StaffRequestRecord, ...current])
       setIsConditionModalOpen(false)
       setSuccessMessage('勤務条件の変更申請を店長へ送信しました。')
       notifyRequestUpdate()
@@ -466,62 +353,16 @@ export default function HomePage() {
 
   const resolveConditionRequest = async (request: StaffRequestRecord, approved: boolean) => {
     if (!isAdmin || isResolvingConditionRequest) return
-    const details = getConditionChangeDetails(request.details)
-    if (!details) {
-      setError('申請内容を読み込めませんでした。')
-      return
-    }
     setIsResolvingConditionRequest(request.id)
     setError('')
     try {
-      if (approved) {
-        const staffUpdate = {
-          weekly_target_days: details.weekly_target_days,
-          main_job: details.main_job,
-          memo: details.memo,
-          ...(details.skills ? { skills: details.skills.join(',') } : {}),
-          ...(details.available_hours !== undefined ? {
-            work_start_1: details.available_hours?.start || null,
-            work_end_1: details.available_hours?.end || null,
-          } : {}),
-        }
-        const { error: staffUpdateError } = await supabase
-          .from('staff')
-          .update(staffUpdate)
-          .eq('id', request.staff_id)
-          .eq('store_id', storeId)
-        if (staffUpdateError) throw staffUpdateError
-        const existingProfile = staffProfiles.find(profile => profile.id === request.staff_id)
-        void analyzeAndSaveStaffConditions({
-          staffId: request.staff_id,
-          storeId,
-          work_start_1: details.available_hours?.start || existingProfile?.work_start_1 || null,
-          work_end_1: details.available_hours?.end || existingProfile?.work_end_1 || null,
-          work_start_2: existingProfile?.work_start_2 || null,
-          work_end_2: existingProfile?.work_end_2 || null,
-          memo: details.memo,
-        })
+      // The server applies the stored request details; the client only says approve / reject.
+      const { resolvedAt, staffUpdate } = unwrap(await resolveConditionRequestAction(storeId, request.id, approved))
+      if (staffUpdate) {
         setStaffProfiles(current => current.map(profile => profile.id === request.staff_id
-          ? {
-            ...profile,
-            weekly_target_days: details.weekly_target_days,
-            main_job: details.main_job,
-            memo: details.memo,
-            ...(details.skills ? { skills: details.skills.join(',') } : {}),
-            ...(details.available_hours !== undefined ? {
-              work_start_1: details.available_hours?.start || null,
-              work_end_1: details.available_hours?.end || null,
-            } : {}),
-          }
+          ? { ...profile, ...(staffUpdate as Partial<StaffProfile>) }
           : profile))
       }
-      const resolvedAt = new Date().toISOString()
-      const { error: requestUpdateError } = await supabase
-        .from('staff_requests')
-        .update({ status: approved ? 'approved' : 'rejected', resolved_at: resolvedAt })
-        .eq('id', request.id)
-        .eq('store_id', storeId)
-      if (requestUpdateError) throw requestUpdateError
       setConditionRequests(current => current.map(item => item.id === request.id
         ? { ...item, status: approved ? 'approved' : 'rejected', resolved_at: resolvedAt }
         : item))
@@ -536,55 +377,15 @@ export default function HomePage() {
 
   const resolveNewStaffRequest = async (request: StaffRequestRecord, approved: boolean) => {
     if (!isAdmin || isResolvingNewStaffRequest) return
-    const details = getNewStaffRegistrationDetails(request.details)
-    if (!details) {
-      setError('新規登録申請の内容を読み込めませんでした。')
-      return
-    }
     setIsResolvingNewStaffRequest(request.id)
     setError('')
     try {
+      const { name } = unwrap(await resolveNewStaffRequestAction(storeId, request.id, approved))
       if (approved) {
-        const { error: staffUpdateError } = await supabase
-          .from('staff')
-          .update({
-            is_employee: details.employment_type === '社員',
-            main_job: details.main_job,
-            weekly_target_days: details.weekly_target_days,
-            work_start_1: details.work_start_1,
-            work_end_1: details.work_end_1,
-            work_start_2: details.work_start_2,
-            work_end_2: details.work_end_2,
-            memo: details.memo,
-          })
-          .eq('id', request.staff_id)
-          .eq('store_id', storeId)
-        if (staffUpdateError) throw staffUpdateError
-        void analyzeAndSaveStaffConditions({
-          staffId: request.staff_id,
-          storeId,
-          work_start_1: details.work_start_1,
-          work_end_1: details.work_end_1,
-          work_start_2: details.work_start_2,
-          work_end_2: details.work_end_2,
-          memo: details.memo,
-        })
-        const { error: updateError } = await supabase
-          .from('staff_requests')
-          .update({ status: 'approved', resolved_at: new Date().toISOString() })
-          .eq('id', request.id)
-          .eq('store_id', storeId)
-        if (updateError) throw updateError
-        setSuccessMessage(`${details.name}さんの新規登録を承認しました。`)
+        setSuccessMessage(`${name}さんの新規登録を承認しました。`)
       } else {
-        const { error: deleteError } = await supabase
-          .from('staff')
-          .delete()
-          .eq('id', request.staff_id)
-          .eq('store_id', storeId)
-        if (deleteError) throw deleteError
         setStaffProfiles(current => current.filter(profile => profile.id !== request.staff_id))
-        setSuccessMessage(`${details.name}さんの新規登録申請を却下しました。`)
+        setSuccessMessage(`${name}さんの新規登録申請を却下しました。`)
       }
       setNewStaffRequests(current => current.filter(item => item.id !== request.id))
       notifyRequestUpdate()
@@ -597,12 +398,7 @@ export default function HomePage() {
 
   const markConditionRequestAsRead = async (request: StaffRequestRecord) => {
     try {
-      const { error: updateError } = await supabase
-        .from('staff_requests')
-        .update({ is_read_by_staff: true })
-        .eq('id', request.id)
-        .eq('staff_id', currentStaff?.id)
-      if (updateError) throw updateError
+      unwrap(await markConditionRequestRead(storeId, request.id))
       setConditionRequests(current => current.map(item => item.id === request.id ? { ...item, is_read_by_staff: true } : item))
       notifyRequestUpdate()
     } catch (caughtError) {
@@ -662,6 +458,20 @@ export default function HomePage() {
                   <button type="button" onClick={() => void updatePinResetRequest(request, false)} disabled={isUpdatingResetRequest !== null} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">拒否</button>
                   <button type="button" onClick={() => void updatePinResetRequest(request, true)} disabled={isUpdatingResetRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">初期化（承認）</button>
                 </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {isAdmin && lockedStaff.length > 0 && (
+        <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><LockKeyhole size={17} className="text-slate-500" />暗証番号の入力ロック中</div>
+          <div className="mt-3 space-y-2">
+            {lockedStaff.map(staff => (
+              <div key={staff.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-4 py-3">
+                <p className="text-sm font-medium text-slate-800">{staff.name}さんは暗証番号の入力に続けて失敗したため、{new Date(staff.lockedUntil).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}までロックされています</p>
+                <button type="button" onClick={() => void unlockStaff(staff)} disabled={isUnlockingStaff !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">ロックを解除</button>
               </div>
             ))}
           </div>
