@@ -48,7 +48,9 @@ import {
 
 const GENERIC_ERROR = '処理に失敗しました。時間をおいて再度お試しください。'
 
-const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 64
+const isId = (value: unknown): value is string =>
+  (typeof value === 'string' && value.length > 0 && value.length <= 64) ||
+  (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
 const isTime = (value: unknown): value is string => typeof value === 'string' && TIME_OPTIONS.includes(value)
 const isOptionalTime = (value: unknown): value is string | null => value === null || isTime(value)
 const isMemo = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_MEMO_LENGTH

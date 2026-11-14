@@ -13,7 +13,13 @@ export const assert: (condition: unknown, message?: string) => asserts condition
   if (!condition) throw new UserFacingError(message)
 }
 
-export const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 64
+/**
+ * Row id as sent by the client: a uuid / text id, or a serial integer id
+ * (column types differ between tables, and rows are passed through untyped).
+ */
+export const isId = (value: unknown): value is string =>
+  (typeof value === 'string' && value.length > 0 && value.length <= 64) ||
+  (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
 
 /** First day of a month, e.g. 2026-12-01 (the format used by target_month). */
 export const isMonthStart = (value: unknown): value is string =>

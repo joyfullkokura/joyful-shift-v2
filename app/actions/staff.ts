@@ -137,7 +137,7 @@ export async function deleteStaff(storeId: string, staffId: string): Promise<Act
   return runAction('deleteStaff', async () => {
     const session = await requireAdmin(storeId)
     assert(isId(staffId))
-    if (staffId === session.id) throw new UserFacingError('ログイン中の自分自身は削除できません。')
+    if (String(staffId) === session.id) throw new UserFacingError('ログイン中の自分自身は削除できません。')
     const { error } = await getAdminClient().from('staff').delete().eq('id', staffId).eq('store_id', storeId)
     check(error)
     return null
