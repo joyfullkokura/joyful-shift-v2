@@ -16,7 +16,7 @@ export const analyzeAndSaveStaffConditions = async ({ staffId, storeId, ...condi
     const response = await fetch('/api/parse-conditions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(conditions),
+      body: JSON.stringify({ ...conditions, storeId }),
     })
     if (!response.ok) throw new Error(`Condition parsing failed: ${response.status}`)
 

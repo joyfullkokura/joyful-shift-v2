@@ -655,7 +655,7 @@ export default function GeneratePage() {
         const response = await fetch('/api/parse-conditions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo }),
+          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo, storeId: Array.isArray(store_id) ? store_id[0] : store_id }),
         })
         if (!response.ok) throw new Error(await response.text())
         const parsedRequest = parseParsedShiftRequest(await response.json())
