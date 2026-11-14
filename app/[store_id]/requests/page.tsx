@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { getMyMonthRequests, getRequestsMonth, saveMyMonthRequests } from '@/app/actions/requests'
+import { unwrap } from '@/lib/action-result'
 import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
@@ -109,21 +110,13 @@ export default function RequestsPage() {
   useEffect(() => {
     const fetchInitialData = async () => {
       if (!storeId) return
-      const { data: staffData } = await supabase.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name')
-      setStaff((staffData || []).sort((left, right) =>
-        Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || left.name.localeCompare(right.name, 'ja')
-      ))
-
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
-      const endOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${daysInMonth}`
-
-      const { data: reqData } = await supabase
-        .from('shift_requests')
-        .select('*')
-        .eq('store_id', storeId)
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth)
-      setAllRequests(reqData || [])
+      const result = await getRequestsMonth(storeId, startOfMonth)
+      if (!result.ok) return
+      setStaff([...result.data.staff].sort((left, right) =>
+        Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || String(left.name ?? '').localeCompare(String(right.name ?? ''), 'ja')
+      ))
+      setAllRequests(result.data.requests)
     }
     fetchInitialData()
   }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
@@ -132,20 +125,17 @@ export default function RequestsPage() {
     if (selectedStaff) {
       const fetchRequests = async () => {
         const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
-        const endOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${daysInMonth}`
-        const { data } = await supabase
-          .from('shift_requests')
-          .select('date, is_off, memo')
-          .eq('staff_id', selectedStaff.id)
-          .gte('date', startOfMonth)
-          .lte('date', endOfMonth)
-        const initialRequests: any = {}
-        data?.forEach(r => { initialRequests[r.date] = { is_off: r.is_off, memo: r.memo || '' } })
+        const result = await getMyMonthRequests(storeId, startOfMonth)
+        if (!result.ok) return
+        const initialRequests: Record<string, { is_off: boolean; memo: string }> = {}
+        result.data.forEach(row => {
+          initialRequests[String(row.date)] = { is_off: row.is_off === true, memo: typeof row.memo === 'string' ? row.memo : '' }
+        })
         setRequests(initialRequests)
       }
       fetchRequests()
     }
-  }, [selectedStaff, targetYear, targetMonth, daysInMonth])
+  }, [selectedStaff, storeId, targetYear, targetMonth])
 
   const handleDateClick = (dateStr: string) => {
     if (isReadOnly) return
@@ -165,17 +155,11 @@ export default function RequestsPage() {
     setIsSaving(true)
     try {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
-      const endOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${daysInMonth}`
-      await supabase.from('shift_requests').delete().eq('staff_id', selectedStaff.id).gte('date', startOfMonth).lte('date', endOfMonth)
-      const insertData = Object.entries(requests)
-        .filter(([_, val]) => val.is_off || val.memo.trim() !== '')
-        .map(([date, val]) => ({
-          staff_id: selectedStaff.id, store_id: storeId, date: date, is_off: val.is_off, memo: val.memo,
-        }))
-      if (insertData.length > 0) {
-        const { error } = await supabase.from('shift_requests').insert(insertData)
-        if (error) throw error
-      }
+      // Saved as the logged-in staff member; the server never takes a staff id from here.
+      const entries = Object.entries(requests)
+        .filter(([, val]) => val.is_off || val.memo.trim() !== '')
+        .map(([date, val]) => ({ date, is_off: val.is_off, memo: val.memo }))
+      unwrap(await saveMyMonthRequests(storeId, startOfMonth, entries))
       alert('保存しました！')
       window.location.reload()
     } catch (err: any) {
