@@ -91,7 +91,6 @@ export default function RequestsPage() {
   const [activeDate, setActiveDate] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [allRequests, setAllRequests] = useState<any[]>([])
-  const [ruleMap, setRuleMap] = useState<Record<string, string>>({})
 
   const now = new Date()
   const [viewDate, setViewDate] = useState(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -128,38 +127,6 @@ export default function RequestsPage() {
     }
     fetchInitialData()
   }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
-
-  useEffect(() => {
-    const fetchRuleMap = async () => {
-      if (!storeId) return
-      const tableName = `rules_${targetYear}_${String(targetMonth).padStart(2, '0')}`
-
-      try {
-        const { data, error } = await supabase.from(tableName).select('*')
-        if (error) {
-          if (!/does not exist|not found/i.test(error.message)) {
-            console.warn('rules table load failed:', error.message)
-          }
-          setRuleMap({})
-          return
-        }
-
-        const nextMap: Record<string, string> = {}
-        ;(data || []).forEach((row: Record<string, any>) => {
-          const staffId = row.staff_id ?? row.staffId ?? row.id
-          if (staffId == null) return
-          const candidate = row.stance ?? row.rule ?? row.rule_text ?? row.memo ?? row.note ?? row.text ?? row.content ?? ''
-          nextMap[String(staffId)] = String(candidate || '未設定')
-        })
-        setRuleMap(nextMap)
-      } catch (error) {
-        console.warn('rules table unavailable:', error)
-        setRuleMap({})
-      }
-    }
-
-    fetchRuleMap()
-  }, [storeId, targetYear, targetMonth])
 
   useEffect(() => {
     if (selectedStaff) {
