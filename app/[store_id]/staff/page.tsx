@@ -1,10 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { fetchStoreStaff } from '@/lib/admin-api-client'
+import { addStaff, deleteStaff, getStaffPageData, saveStaffMember, saveStaffRoster } from '@/app/actions/staff'
 import { parseSkillOptions } from '@/lib/skill-options'
-import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
 import { formatParsedConditions } from '@/lib/parsed-conditions'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
@@ -29,17 +27,14 @@ export default function StaffPage() {
     const fetchData = async () => {
       if (!storeId) return
       
-      // Via the server so pin_hash never reaches the browser.
-      const staffData = await fetchStoreStaff(storeId, 'created_at').catch(() => [])
-      setStaff(staffData)
-
-      const { data: storeData } = await supabase
-        .from('stores')
-        .select('skill_options')
-        .eq('store_id', storeId)
-        .single()
-      
-      setSkillOptions(parseSkillOptions(storeData?.skill_options))
+      // Loaded on the server (admin only) so pin_hash never reaches the browser.
+      const result = await getStaffPageData(storeId)
+      if (!result.ok) {
+        alert('名簿を読み込めませんでした: ' + result.error)
+        return
+      }
+      setStaff(result.data.staff)
+      setSkillOptions(parseSkillOptions(result.data.skillOptions))
     }
     fetchData()
   }, [storeId])
@@ -48,28 +43,11 @@ export default function StaffPage() {
   const handleAddStaff = async () => {
     if (!newName.trim()) return
     setIsSubmitting(true)
-    const { data, error } = await supabase
-      .from('staff')
-      .insert([{ 
-        name: newName, 
-        store_id: storeId, 
-        main_job: 'ホール', 
-        rank: 'B',
-        weekly_target_days: 3,
-        work_start_2: null, // 初期値は空
-        work_end_2: null
-      }])
-      // Only the id comes back from the anon client; the full row is re-read on the server.
-      .select('id')
-
-    if (error) alert('登録失敗: ' + error.message)
+    const result = await addStaff(storeId, newName)
+    if (!result.ok) alert('登録失敗: ' + result.error)
     else {
-      const createdId = data?.[0]?.id
-      if (createdId) {
-        const refreshed = await fetchStoreStaff(storeId, 'created_at').catch(() => null)
-        if (refreshed) setStaff(refreshed)
-        setNewStaffId(String(createdId))
-      }
+      setStaff(result.data.staff)
+      setNewStaffId(result.data.id)
       setNewName('')
     }
     setIsSubmitting(false)
@@ -95,16 +73,17 @@ export default function StaffPage() {
 
   const handleBulkSave = async () => {
     setIsBulkSaving(true)
-    const { error } = await supabase.from('staff').upsert(staff)
-    if (error) alert('保存失敗: ' + error.message)
+    // Only editable fields of this store's existing staff are written (checked on the server).
+    const result = await saveStaffRoster(storeId, staff)
+    if (!result.ok) alert('保存失敗: ' + result.error)
     else alert('すべての変更を保存しました！')
     setIsBulkSaving(false)
   }
 
   const handleDeleteStaff = async (id: string) => {
-    const { error } = await supabase.from('staff').delete().eq('id', id)
-    if (error) {
-      alert('削除失敗: ' + error.message)
+    const result = await deleteStaff(storeId, id)
+    if (!result.ok) {
+      alert('削除失敗: ' + result.error)
       return
     }
     setStaff(prev => prev.filter(person => person.id !== id))
@@ -115,19 +94,11 @@ export default function StaffPage() {
     if (!newStaff) return
 
     setIsNewStaffSaving(true)
-    const { error } = await supabase.from('staff').upsert(newStaff)
-    if (error) {
-      alert('詳細の保存に失敗しました: ' + error.message)
+    // The server saves the row and re-runs the AI condition analysis in the background.
+    const result = await saveStaffMember(storeId, newStaff)
+    if (!result.ok) {
+      alert('詳細の保存に失敗しました: ' + result.error)
     } else {
-      void analyzeAndSaveStaffConditions({
-        staffId: newStaff.id,
-        storeId,
-        work_start_1: newStaff.work_start_1 || null,
-        work_end_1: newStaff.work_end_1 || null,
-        work_start_2: newStaff.work_start_2 || null,
-        work_end_2: newStaff.work_end_2 || null,
-        memo: newStaff.memo || '',
-      })
       setNewStaffId(null)
     }
     setIsNewStaffSaving(false)
