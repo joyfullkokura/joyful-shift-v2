@@ -1,8 +1,15 @@
 'use client'
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { supabase } from '@/lib/supabase'
-import { fetchStoreSettings, fetchStoreStaff } from '@/lib/admin-api-client'
+import {
+  deleteMonthlyShift,
+  getGenerateContext,
+  getGenerationInputs,
+  saveGenerationSettings,
+  saveMonthlyShift,
+  saveParsedShiftRequest,
+} from '@/app/actions/generate'
+import { unwrap } from '@/lib/action-result'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
@@ -108,6 +115,12 @@ type StaffRecord = {
   work_end_1?: string | null
   work_start_2?: string | null
   work_end_2?: string | null
+}
+
+type GenerationSettingRow = {
+  config_type: string
+  counts: unknown
+  slots: unknown
 }
 
 type ShiftRequest = {
@@ -427,19 +440,13 @@ export default function GeneratePage() {
     setDraftError('')
 
     try {
-    const sInfo = await fetchStoreSettings(currentStoreId)
+    // One admin-only server call: store settings, this month's draft and generation settings.
+    const context = unwrap(await getGenerateContext(currentStoreId, targetMonthStr))
+    const sInfo = context.store
     if (sInfo) setStoreInfo(sInfo)
 
-    const { data: draftRow, error: draftFetchError } = await supabase
-      .from('monthly_shifts')
-      .select('*')
-      .eq('store_id', currentStoreId)
-      .eq('target_month', targetMonthStr)
-      .maybeSingle()
-
-    if (draftFetchError) {
-      setDraftError(`下書きを確認できませんでした: ${draftFetchError.message}`)
-    } else if (draftRow?.status === 'draft') {
+    const draftRow = context.draft
+    if (draftRow?.status === 'draft') {
       const storedSchedule = (draftRow.schedule_data ?? draftRow.schedule ?? draftRow.shifts) as GeneratedSchedule | undefined
       if (storedSchedule && Array.isArray(storedSchedule.staff) && Array.isArray(storedSchedule.alerts)) {
         setGeneratedSchedule(storedSchedule)
@@ -452,11 +459,7 @@ export default function GeneratePage() {
     setIsDraftEdit(false)
     const storeGroups = typeof sInfo?.group_options === 'string' ? sInfo.group_options.split(',') : []
 
-    const { data: currentSettings } = await supabase
-      .from('generation_settings')
-      .select('*')
-      .eq('store_id', currentStoreId)
-      .eq('target_month', targetMonthStr)
+    const currentSettings = context.settings as GenerationSettingRow[]
 
     const newCounts: any = {}
     const newSlots: any = {}
@@ -471,13 +474,7 @@ export default function GeneratePage() {
         }
       })
     } else {
-      const { data: pastSettings } = await supabase
-        .from('generation_settings')
-        .select('*')
-        .eq('store_id', currentStoreId)
-        .in('config_type', ['wd', 'we'])
-        .order('target_month', { ascending: false })
-        .limit(10)
+      const pastSettings = context.pastSettings as GenerationSettingRow[]
 
       if (pastSettings && pastSettings.length > 0) {
         const latestWd = pastSettings.find(s => s.config_type === 'wd')
@@ -561,40 +558,13 @@ export default function GeneratePage() {
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      const { data: existingSettings, error: fetchError } = await supabase
-        .from('generation_settings')
-        .select('config_type')
-        .eq('store_id', store_id)
-        .eq('target_month', targetMonthStr)
-
-      if (fetchError) throw fetchError
-
-      const existingSpecials = (existingSettings || [])
-        .map((row: any) => row.config_type)
-        .filter((type: string) => type !== 'wd' && type !== 'we')
-
-      const removeSpecials = existingSpecials.filter((type: string) => !selectedSpecialDays.includes(type))
-
-      if (removeSpecials.length > 0) {
-        const { error: deleteError } = await supabase
-          .from('generation_settings')
-          .delete()
-          .eq('store_id', store_id)
-          .eq('target_month', targetMonthStr)
-          .in('config_type', removeSpecials)
-
-        if (deleteError) throw deleteError
-      }
-
-      const payload = ['wd', 'we', ...selectedSpecialDays].map(type => ({
-        store_id: store_id,
-        target_month: targetMonthStr,
+      // The server removes deselected special days and upserts the rest for this store only.
+      const entries = ['wd', 'we', ...selectedSpecialDays].map(type => ({
         config_type: type,
         counts: counts[type] || {},
         slots: slots[type] || {},
       }))
-      const { error } = await supabase.from('generation_settings').upsert(payload, { onConflict: 'store_id, target_month, config_type' })
-      if (error) throw error
+      unwrap(await saveGenerationSettings(String(Array.isArray(store_id) ? store_id[0] : store_id), targetMonthStr, entries))
       alert('設定を保存しました！')
     } catch (e: any) {
       alert('保存失敗: ' + e.message)
@@ -624,21 +594,15 @@ export default function GeneratePage() {
   const buildGeneratedSchedule = async () => {
     if (!store_id || !storeInfo) return
 
-    const staffData = await fetchStoreStaff(Array.isArray(store_id) ? store_id[0] : store_id, 'name')
+    const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
+    const inputsResult = await getGenerationInputs(currentStoreId, targetMonthStr)
+    if (!inputsResult.ok) {
+      setRequestAnalysisWarning(inputsResult.error)
+      return
+    }
+    const staffData = inputsResult.data.staff
 
-    const startDate = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
-    const nextMonth = targetMonth === 12 ? 1 : targetMonth + 1
-    const nextYear = targetMonth === 12 ? targetYear + 1 : targetYear
-    const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`
-
-    const { data: requestData } = await supabase
-      .from('shift_requests')
-      .select('*')
-      .eq('store_id', store_id)
-      .gte('date', startDate)
-      .lt('date', endDate)
-
-    const requests = (requestData || []) as ShiftRequest[]
+    const requests = inputsResult.data.requests as ShiftRequest[]
     const staffNames = new Map(((staffData || []) as StaffRecord[]).map(staff => [staff.id, staff.name]))
     const analysisWarnings: string[] = []
     const pendingMemoRequests = requests.filter(request =>
@@ -652,17 +616,12 @@ export default function GeneratePage() {
         const response = await fetch('/api/parse-conditions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo, storeId: Array.isArray(store_id) ? store_id[0] : store_id }),
+          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo, storeId: currentStoreId }),
         })
         if (!response.ok) throw new Error(await response.text())
         const parsedRequest = parseParsedShiftRequest(await response.json())
         if (!parsedRequest) throw new Error('Invalid parsed request response.')
-        const { error } = await supabase
-          .from('shift_requests')
-          .update({ parsed_request: parsedRequest })
-          .eq('id', request.id)
-          .eq('store_id', store_id)
-        if (error) throw error
+        unwrap(await saveParsedShiftRequest(currentStoreId, String(request.id), parsedRequest))
         request.parsed_request = parsedRequest
       } catch (error) {
         console.error('日付要望のAI解析に失敗しました。', error)
@@ -1151,17 +1110,11 @@ export default function GeneratePage() {
     setConfirmError('')
     try {
       const storeId = Array.isArray(store_id) ? store_id[0] : store_id
-      const { error } = await supabase.from('monthly_shifts').upsert({
-        store_id: storeId,
-        target_month: targetMonthStr,
-        status: 'draft',
-        schedule_data: {
-          ...generatedSchedule,
-          alerts: currentScheduleAlerts,
-          vacancyCount: currentVacancyCount,
-        },
-      }, { onConflict: 'store_id,target_month' })
-      if (error) throw error
+      unwrap(await saveMonthlyShift(storeId, targetMonthStr, 'draft', {
+        ...generatedSchedule,
+        alerts: currentScheduleAlerts,
+        vacancyCount: currentVacancyCount,
+      }))
       setIsDraftEdit(true)
       setDraftNotice('下書きを保存しました')
       setDraftError('')
@@ -1215,17 +1168,11 @@ export default function GeneratePage() {
     setDraftError('')
     setDraftNotice('')
     try {
-      const { error } = await supabase.from('monthly_shifts').upsert({
-        store_id: currentStoreId,
-        target_month: targetMonthStr,
-        status: 'draft',
-        schedule_data: {
-          ...generatedSchedule,
-          alerts: currentScheduleAlerts,
-          vacancyCount: currentVacancyCount,
-        },
-      }, { onConflict: 'store_id,target_month' })
-      if (error) throw error
+      unwrap(await saveMonthlyShift(currentStoreId, targetMonthStr, 'draft', {
+        ...generatedSchedule,
+        alerts: currentScheduleAlerts,
+        vacancyCount: currentVacancyCount,
+      }))
       setDraftNotice('下書きを保存しました')
     } catch (error) {
       setDraftError(`下書きを保存できませんでした: ${error instanceof Error ? error.message : '通信エラー'}`)
@@ -1240,12 +1187,7 @@ export default function GeneratePage() {
     setDraftAction('discard')
     setDraftError('')
     try {
-      const { error } = await supabase
-        .from('monthly_shifts')
-        .delete()
-        .eq('store_id', currentStoreId)
-        .eq('target_month', targetMonthStr)
-      if (error) throw error
+      unwrap(await deleteMonthlyShift(currentStoreId, targetMonthStr))
       setGeneratedSchedule(null)
       setIsDraftEdit(false)
       setDraftNotice('')
@@ -1264,17 +1206,11 @@ export default function GeneratePage() {
     setDraftAction('confirm')
     setDraftError('')
     try {
-      const { error } = await supabase.from('monthly_shifts').upsert({
-        store_id: currentStoreId,
-        target_month: targetMonthStr,
-        status: 'confirmed',
-        schedule_data: {
-          ...generatedSchedule,
-          alerts: currentScheduleAlerts,
-          vacancyCount: currentVacancyCount,
-        },
-      }, { onConflict: 'store_id,target_month' })
-      if (error) throw error
+      unwrap(await saveMonthlyShift(currentStoreId, targetMonthStr, 'confirmed', {
+        ...generatedSchedule,
+        alerts: currentScheduleAlerts,
+        vacancyCount: currentVacancyCount,
+      }))
       alert('シフトを確定・公開しました！')
       router.push(`/${encodeURIComponent(currentStoreId)}/view`)
     } catch (error) {
