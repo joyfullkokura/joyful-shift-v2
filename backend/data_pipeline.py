@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from supabase import Client, create_client
 
 
+# .env.local (Next.js convention) takes precedence over .env; neither is committed.
+load_dotenv(Path(__file__).resolve().parent.parent / '.env.local')
 load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 
@@ -55,16 +57,14 @@ def get_supabase_client() -> Client:
         or os.getenv('NEXT_PUBLIC_SUPABASE_URL')
         or os.getenv('SUPABASE_PROJECT_URL')
     )
-    key = (
-        os.getenv('SUPABASE_ANON_KEY')
-        or os.getenv('NEXT_PUBLIC_SUPABASE_ANON_KEY')
-        or os.getenv('SUPABASE_SERVICE_ROLE_KEY')
-    )
+    # The anon key can no longer read staff / stores once RLS is locked down,
+    # so this local tool uses the server-only service role (secret) key.
+    key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
 
     if not url or not key:
         raise RuntimeError(
-            'Supabase credentials are not set. Please define SUPABASE_URL / SUPABASE_ANON_KEY '
-            'or NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in the environment or .env file.'
+            'Supabase credentials are not set. Please define NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) '
+            'and SUPABASE_SERVICE_ROLE_KEY in .env.local or .env. Never expose the service role key to a browser.'
         )
 
     return create_client(url, key)
