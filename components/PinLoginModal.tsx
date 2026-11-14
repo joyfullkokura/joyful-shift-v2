@@ -2,19 +2,27 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Check, KeyRound, LockKeyhole, X } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
-import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
-import type { CurrentStaff } from '@/context/AdminContext'
+import { changePin, completeInitialSetup as completeInitialSetupAction, loginWithPin, requestPinReset as requestPinResetAction, verifyCurrentPin } from '@/app/actions/auth'
+import type { LoginResult, PinCheckResult, SessionStaff, SetupDefaults } from '@/lib/auth-types'
+import { JOB_OPTIONS, TIME_OPTIONS } from '@/lib/staff-profile-options'
 
 type PinLoginMode = 'setup' | 'login' | 'change'
 type PinStage = 'pin' | 'confirm' | 'current' | 'new' | 'profile'
 
+/** A login-screen member, or the logged-in staff member when changing the PIN. */
+type PinModalStaff = {
+  id: string
+  name: string
+  hasPin?: boolean
+  setupDefaults?: SetupDefaults | null
+}
+
 type PinLoginModalProps = {
-  staff: CurrentStaff
+  staff: PinModalStaff
   storeId: string
   mode?: PinLoginMode
   onClose: () => void
-  onSuccess: (staff: CurrentStaff) => void
+  onSuccess: (staff: SessionStaff) => void
 }
 
 const MIN_PIN_LENGTH = 4
@@ -24,13 +32,6 @@ const EMPLOYMENT_TYPES = [
   { value: 'part_time', label: 'アルバイト・パート' },
   { value: 'employee', label: '社員' },
 ]
-const TIME_OPTIONS = Array.from({ length: 61 }, (_, index) => {
-  const totalMinutes = 9 * 60 + index * 15
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
-})
-const JOB_OPTIONS = ['ホール', 'キッチン', '共通']
 
 function getTargetWorkDays(value: number | null | undefined) {
   return typeof value === 'number' && value >= 1 && value <= 6 ? String(value) : '3'
@@ -43,6 +44,20 @@ function getMainJob(value: string | null | undefined) {
 function getTimeValue(value: string | null | undefined) {
   const time = value?.slice(0, 5) ?? ''
   return TIME_OPTIONS.includes(time) ? time : ''
+}
+
+/** User-facing message for a failed PIN check. */
+function describePinFailure(result: Exclude<PinCheckResult | LoginResult, { status: 'ok' }>, fallback: string): string {
+  switch (result.status) {
+    case 'locked':
+      return `暗証番号の入力に続けて失敗したため、一時的にロックされています。${result.retryAfterMinutes}分後に再度お試しください。`
+    case 'unavailable':
+      return '現在このアカウントではログインできません。店長にお問い合わせください。'
+    case 'error':
+      return result.message
+    default:
+      return fallback
+  }
 }
 
 function AvailabilityRange({ label, description, required = false, start, end, onStartChange, onEndChange }: {
@@ -71,43 +86,38 @@ function AvailabilityRange({ label, description, required = false, start, end, o
   </fieldset>
 }
 
-async function hashPin(pin: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
 export default function PinLoginModal({ staff, storeId, mode: requestedMode, onClose, onSuccess }: PinLoginModalProps) {
+  const defaults = staff.setupDefaults ?? null
+  const mode: PinLoginMode = requestedMode ?? (staff.hasPin ? 'login' : 'setup')
+  const initialStage: PinStage = mode === 'change' ? 'current' : mode === 'setup' ? 'profile' : 'pin'
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
-  const [stage, setStage] = useState<PinStage>(() => requestedMode === 'change'
-    ? 'current'
-    : requestedMode === 'setup' || (!requestedMode && !staff.pin_hash)
-      ? 'profile'
-      : 'pin')
+  const [verifiedCurrentPin, setVerifiedCurrentPin] = useState('')
+  const [stage, setStage] = useState<PinStage>(initialStage)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
-  const [targetWorkDays, setTargetWorkDays] = useState(() => getTargetWorkDays(staff.weekly_target_days))
-  const [employmentType, setEmploymentType] = useState(staff.is_employee ? 'employee' : 'part_time')
-  const [mainJob, setMainJob] = useState(() => getMainJob(staff.main_job))
-  const [workStart1, setWorkStart1] = useState(() => getTimeValue(staff.work_start_1))
-  const [workEnd1, setWorkEnd1] = useState(() => getTimeValue(staff.work_end_1))
-  const [workStart2, setWorkStart2] = useState(() => getTimeValue(staff.work_start_2))
-  const [workEnd2, setWorkEnd2] = useState(() => getTimeValue(staff.work_end_2))
-  const [memo, setMemo] = useState(() => staff.memo ?? '')
-  const mode = requestedMode ?? (staff.pin_hash ? 'login' : 'setup')
+  const [targetWorkDays, setTargetWorkDays] = useState(() => getTargetWorkDays(defaults?.weekly_target_days))
+  const [employmentType, setEmploymentType] = useState('part_time')
+  const [mainJob, setMainJob] = useState(() => getMainJob(defaults?.main_job))
+  const [workStart1, setWorkStart1] = useState(() => getTimeValue(defaults?.work_start_1))
+  const [workEnd1, setWorkEnd1] = useState(() => getTimeValue(defaults?.work_end_1))
+  const [workStart2, setWorkStart2] = useState(() => getTimeValue(defaults?.work_start_2))
+  const [workEnd2, setWorkEnd2] = useState(() => getTimeValue(defaults?.work_end_2))
+  const [memo, setMemo] = useState(() => defaults?.memo ?? '')
 
   const resetPin = useCallback(() => {
     setPin('')
     setConfirmPin('')
-    setStage(requestedMode === 'change'
-      ? 'current'
-      : requestedMode === 'setup' || (!requestedMode && !staff.pin_hash)
-        ? 'profile'
-        : 'pin')
-    setError('')
+    setVerifiedCurrentPin('')
+    setStage(initialStage)
     setIsProcessing(false)
-  }, [requestedMode, staff.pin_hash])
+  }, [initialStage])
+
+  const failAndReset = useCallback((message: string) => {
+    resetPin()
+    setError(message)
+  }, [resetPin])
 
   const submitCurrent = useCallback(async () => {
     const value = stage === 'confirm' ? confirmPin : pin
@@ -120,12 +130,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
     try {
       if (stage === 'current') {
-        const currentHash = await hashPin(value)
-        if (currentHash !== staff.pin_hash) {
-          setError('現在の暗証番号が一致しませんでした。もう一度入力してください。')
-          resetPin()
+        const result = await verifyCurrentPin(storeId, value)
+        if (result.status !== 'ok') {
+          failAndReset(describePinFailure(result, '現在の暗証番号が一致しませんでした。もう一度入力してください。'))
           return
         }
+        setVerifiedCurrentPin(value)
         setPin('')
         setStage('new')
         setIsProcessing(false)
@@ -134,17 +144,16 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
       if (stage === 'new' || stage === 'pin') {
         if (mode === 'login') {
-          const pinHash = await hashPin(value)
-          if (pinHash !== staff.pin_hash) {
-            if (value.length === MAX_PIN_LENGTH) {
-              setError('暗証番号が一致しませんでした。もう一度入力してください。')
-              resetPin()
-            } else {
-              setIsProcessing(false)
-            }
+          const result = await loginWithPin(storeId, staff.id, value)
+          if (result.status === 'ok') {
+            onSuccess(result.staff)
             return
           }
-          onSuccess(staff)
+          if (result.status === 'mismatch' && value.length < MAX_PIN_LENGTH) {
+            setIsProcessing(false)
+            return
+          }
+          failAndReset(describePinFailure(result, '暗証番号が一致しませんでした。もう一度入力してください。'))
           return
         }
         setConfirmPin('')
@@ -155,8 +164,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
 
       if (stage === 'confirm') {
         if (confirmPin !== pin) {
-          setError('暗証番号が一致しませんでした。もう一度入力してください。')
-          resetPin()
+          failAndReset('暗証番号が一致しませんでした。もう一度入力してください。')
           return
         }
         if (mode === 'setup') {
@@ -164,16 +172,17 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
           setIsProcessing(false)
           return
         }
-        const pinHash = await hashPin(pin)
-        const { error: updateError } = await supabase.from('staff').update({ pin_hash: pinHash }).eq('id', staff.id).eq('store_id', storeId)
-        if (updateError) throw updateError
-        onSuccess({ ...staff, pin_hash: pinHash })
+        const result = await changePin(storeId, verifiedCurrentPin, pin)
+        if (result.status !== 'ok') {
+          failAndReset(describePinFailure(result, '現在の暗証番号が一致しませんでした。もう一度入力してください。'))
+          return
+        }
+        onSuccess(result.staff)
       }
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '認証に失敗しました。')
-      resetPin()
+    } catch {
+      failAndReset('認証に失敗しました。')
     }
-  }, [confirmPin, isProcessing, mode, onSuccess, pin, resetPin, staff, stage, storeId])
+  }, [confirmPin, failAndReset, isProcessing, mode, onSuccess, pin, staff.id, stage, storeId, verifiedCurrentPin])
 
   const completeInitialSetup = useCallback(async () => {
     if (isProcessing) return
@@ -202,38 +211,34 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
     setIsProcessing(true)
     setError('')
     try {
-      const pinHash = await hashPin(pin)
-      const { error: updateError } = await supabase
-        .from('staff')
-        .update({
-          pin_hash: pinHash,
-          weekly_target_days: Number(targetWorkDays),
-          main_job: mainJob,
-          is_employee: employmentType === 'employee',
-          work_start_1: workStart1 || null,
-          work_end_1: workEnd1 || null,
-          work_start_2: workStart2 || null,
-          work_end_2: workEnd2 || null,
-          memo: memo.trim(),
-        })
-        .eq('id', staff.id)
-        .eq('store_id', storeId)
-      if (updateError) throw updateError
-      void analyzeAndSaveStaffConditions({
-        staffId: staff.id,
-        storeId,
-        work_start_1: workStart1 || null,
-        work_end_1: workEnd1 || null,
+      const result = await completeInitialSetupAction(storeId, staff.id, pin, {
+        weekly_target_days: Number(targetWorkDays),
+        main_job: mainJob,
+        wants_employee: employmentType === 'employee',
+        work_start_1: workStart1,
+        work_end_1: workEnd1,
         work_start_2: workStart2 || null,
         work_end_2: workEnd2 || null,
         memo: memo.trim(),
       })
-      onSuccess({ ...staff, pin_hash: pinHash, is_employee: employmentType === 'employee' })
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '基本勤務条件を登録できませんでした。')
+      if (result.status !== 'ok') {
+        setError(result.status === 'locked'
+          ? `送信回数の上限に達しました。${result.retryAfterMinutes}分後に再度お試しください。`
+          : result.status === 'unavailable'
+            ? 'このアカウントは初回設定できません。店長にお問い合わせください。'
+            : result.message)
+        setIsProcessing(false)
+        return
+      }
+      if (result.employeeRequestPending) {
+        window.alert('雇用区分「社員」の権限は、店長が従業員名簿で設定した後に有効になります。それまではスタッフ権限でご利用ください。')
+      }
+      onSuccess(result.staff)
+    } catch {
+      setError('基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
     }
-  }, [confirmPin, employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
+  }, [confirmPin, employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff.id, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -245,26 +250,29 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
     setError('')
   }, [confirmPin.length, isProcessing, pin.length, stage])
 
+  // Auto-submit from the 4th digit, as before. The server counts every mismatch
+  // toward the lockout; only an 8-digit mismatch (or a lock) is shown as an error.
   useEffect(() => {
     if (mode !== 'login' || stage !== 'pin' || pin.length < MIN_PIN_LENGTH || isProcessing) return
     let isCurrent = true
 
     const authenticate = async () => {
-      const pinHash = await hashPin(pin)
+      const result = await loginWithPin(storeId, staff.id, pin)
       if (!isCurrent) return
-      if (pinHash === staff.pin_hash) {
-        onSuccess(staff)
+      if (result.status === 'ok') {
+        onSuccess(result.staff)
         return
       }
-      if (pin.length === MAX_PIN_LENGTH) {
-        setError('暗証番号が一致しませんでした。もう一度入力してください。')
-        setPin('')
-      }
+      if (result.status === 'mismatch' && pin.length < MAX_PIN_LENGTH) return
+      setError(describePinFailure(result, '暗証番号が一致しませんでした。もう一度入力してください。'))
+      setPin('')
     }
 
-    void authenticate()
+    void authenticate().catch(() => {
+      if (isCurrent) setError('認証に失敗しました。')
+    })
     return () => { isCurrent = false }
-  }, [isProcessing, mode, onSuccess, pin, staff, stage])
+  }, [isProcessing, mode, onSuccess, pin, staff.id, stage, storeId])
 
   const requestPinReset = useCallback(async () => {
     if (!window.confirm('社員に暗証番号のリセットを申請しますか？')) return
@@ -272,15 +280,12 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
     setResetRequestMessage('')
     setIsProcessing(true)
     try {
-      const { error: updateError } = await supabase
-        .from('staff')
-        .update({ pin_reset_requested: true })
-        .eq('id', staff.id)
-        .eq('store_id', storeId)
-      if (updateError) throw updateError
-      setResetRequestMessage('申請を送信しました。社員の承認をお待ちください。')
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'リセット申請を送信できませんでした。')
+      const result = await requestPinResetAction(storeId, staff.id)
+      if (result.status === 'locked') setError(`送信回数の上限に達しました。${result.retryAfterMinutes}分後に再度お試しください。`)
+      else if (result.status === 'error') setError(result.message)
+      else setResetRequestMessage('申請を送信しました。社員の承認をお待ちください。')
+    } catch {
+      setError('リセット申請を送信できませんでした。')
     } finally {
       setIsProcessing(false)
     }
@@ -423,7 +428,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
               暗証番号を忘れた場合は、社員にリセットを申請
             </button>
           )}
-          <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />安全なWeb Cryptoでハッシュ化します</>}</div>
+          <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />暗証番号はサーバーで安全に照合されます</>}</div>
           </div>}
       </section>
     </div>

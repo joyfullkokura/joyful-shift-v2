@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import PinLoginModal from '@/components/PinLoginModal'
 import { useAdmin } from '@/context/AdminContext'
+import { resolvePinReset } from '@/app/actions/auth'
 import { supabase } from '@/lib/supabase'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { analyzeAndSaveStaffConditions } from '@/lib/condition-analysis-client'
@@ -404,15 +405,9 @@ export default function HomePage() {
     setIsUpdatingResetRequest(request.id)
     setError('')
     try {
-      const update = approved
-        ? { pin_hash: null, pin_reset_requested: false }
-        : { pin_reset_requested: false }
-      const { error: updateError } = await supabase
-        .from('staff')
-        .update(update)
-        .eq('id', request.id)
-        .eq('store_id', storeId)
-      if (updateError) throw updateError
+      // Clearing a PIN also revokes that staff member's sessions, so it runs on the server.
+      const result = await resolvePinReset(storeId, request.id, approved)
+      if (result.status !== 'ok') throw new Error(result.status === 'error' ? result.message : 'リセット申請を更新できませんでした。')
       setPinResetRequests(current => current.filter(item => item.id !== request.id))
       setSuccessMessage(approved
         ? `${request.name}さんの暗証番号を初期化しました。`
@@ -645,7 +640,7 @@ export default function HomePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {currentStaff?.pin_hash && (
+          {currentStaff && (
             <button type="button" onClick={() => setIsChangingPin(true)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">
               <KeyRound size={16} className="text-slate-500" />暗証番号を変更
             </button>
