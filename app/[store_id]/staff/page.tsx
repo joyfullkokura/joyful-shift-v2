@@ -6,6 +6,45 @@ import { parseSkillOptions } from '@/lib/skill-options'
 import { formatParsedConditions } from '@/lib/parsed-conditions'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
+import type { DataRow } from '@/lib/action-result'
+
+/** One roster row as edited on this screen. Only these fields are sent back and saved. */
+type RosterStaff = {
+  id: string
+  name: string
+  rank: string | null
+  main_job: string | null
+  weekly_target_days: number | null
+  is_employee: boolean
+  memo: string | null
+  skills: string | null
+  work_start_1: string | null
+  work_end_1: string | null
+  work_start_2: string | null
+  work_end_2: string | null
+  parsed_conditions: unknown
+}
+
+type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions'>
+
+const textOrNull = (value: unknown) => (typeof value === 'string' ? value : null)
+
+const toRosterStaff = (row: DataRow): RosterStaff => ({
+  id: String(row.id),
+  name: typeof row.name === 'string' ? row.name : '',
+  rank: textOrNull(row.rank),
+  main_job: textOrNull(row.main_job),
+  weekly_target_days: typeof row.weekly_target_days === 'number' ? row.weekly_target_days : null,
+  is_employee: row.is_employee === true,
+  memo: textOrNull(row.memo),
+  // skills has been stored both as text and as an array; the screen edits it as text.
+  skills: Array.isArray(row.skills) ? row.skills.filter((skill): skill is string => typeof skill === 'string').join(',') : textOrNull(row.skills),
+  work_start_1: textOrNull(row.work_start_1),
+  work_end_1: textOrNull(row.work_end_1),
+  work_start_2: textOrNull(row.work_start_2),
+  work_end_2: textOrNull(row.work_end_2),
+  parsed_conditions: row.parsed_conditions,
+})
 
 export default function StaffPage() {
   const params = useParams()
@@ -13,7 +52,7 @@ export default function StaffPage() {
   const { isAdmin } = useAdmin()
 
   // --- 状態管理（State） ---
-  const [staff, setStaff] = useState<any[]>([])
+  const [staff, setStaff] = useState<RosterStaff[]>([])
   const [newName, setNewName] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSaving, setIsBulkSaving] = useState(false)
@@ -33,7 +72,7 @@ export default function StaffPage() {
         alert('名簿を読み込めませんでした: ' + result.error)
         return
       }
-      setStaff(result.data.staff)
+      setStaff(result.data.staff.map(toRosterStaff))
       setSkillOptions(parseSkillOptions(result.data.skillOptions))
     }
     fetchData()
@@ -46,7 +85,7 @@ export default function StaffPage() {
     const result = await addStaff(storeId, newName)
     if (!result.ok) alert('登録失敗: ' + result.error)
     else {
-      setStaff(result.data.staff)
+      setStaff(result.data.staff.map(toRosterStaff))
       setNewStaffId(result.data.id)
       setNewName('')
     }
@@ -54,7 +93,7 @@ export default function StaffPage() {
   }
 
   // --- 3. 編集用ヘルパー関数 ---
-  const handleUpdateField = (id: string, field: string, value: any) => {
+  const handleUpdateField = <K extends EditableField>(id: string, field: K, value: RosterStaff[K]) => {
     setStaff(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p))
   }
 
@@ -104,7 +143,7 @@ export default function StaffPage() {
     setIsNewStaffSaving(false)
   }
 
-  const getWorkTimeSuggestions = (person: any, slot: 'slot1' | 'slot2') => {
+  const getWorkTimeSuggestions = (person: RosterStaff, slot: 'slot1' | 'slot2') => {
     const collected: { label: string; start: string; end: string }[] = []
 
     staff

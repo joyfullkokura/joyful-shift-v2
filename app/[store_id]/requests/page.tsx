@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { getMyMonthRequests, getRequestsMonth, saveMyMonthRequests } from '@/app/actions/requests'
-import { unwrap } from '@/lib/action-result'
+import { unwrap, type DataRow } from '@/lib/action-result'
 import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
@@ -64,12 +64,28 @@ const getDateKind = (dateStr: string, year: number) => {
   return 'weekday'
 }
 
-const excelCellBorder = {
+const excelCellBorder: Partial<ExcelJS.Borders> = {
   top: { style: 'thin' },
   left: { style: 'thin' },
   bottom: { style: 'thin' },
   right: { style: 'thin' },
-} as any
+}
+
+type RequestStaff = { id: string; name: string; is_employee: boolean }
+type MonthRequest = { staff_id: string; date: string; is_off: boolean; memo: string | null }
+
+const toRequestStaff = (row: DataRow): RequestStaff => ({
+  id: String(row.id),
+  name: typeof row.name === 'string' ? row.name : '',
+  is_employee: row.is_employee === true,
+})
+
+const toMonthRequest = (row: DataRow): MonthRequest => ({
+  staff_id: String(row.staff_id),
+  date: String(row.date),
+  is_off: row.is_off === true,
+  memo: typeof row.memo === 'string' ? row.memo : null,
+})
 
 const toColumnName = (index: number) => {
   let column = ''
@@ -86,12 +102,12 @@ export default function RequestsPage() {
   const params = useParams()
   const storeId = params.store_id as string
   const { currentStaff } = useAdmin()
-  const [staff, setStaff] = useState<any[]>([])
+  const [staff, setStaff] = useState<RequestStaff[]>([])
   const selectedStaff = currentStaff
   const [requests, setRequests] = useState<{[key: string]: {is_off: boolean, memo: string}}>({})
   const [activeDate, setActiveDate] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [allRequests, setAllRequests] = useState<any[]>([])
+  const [allRequests, setAllRequests] = useState<MonthRequest[]>([])
 
   const now = new Date()
   const [viewDate, setViewDate] = useState(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -113,10 +129,10 @@ export default function RequestsPage() {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       const result = await getRequestsMonth(storeId, startOfMonth)
       if (!result.ok) return
-      setStaff([...result.data.staff].sort((left, right) =>
-        Number(Boolean(right.is_employee)) - Number(Boolean(left.is_employee)) || String(left.name ?? '').localeCompare(String(right.name ?? ''), 'ja')
+      setStaff(result.data.staff.map(toRequestStaff).sort((left, right) =>
+        Number(right.is_employee) - Number(left.is_employee) || left.name.localeCompare(right.name, 'ja')
       ))
-      setAllRequests(result.data.requests)
+      setAllRequests(result.data.requests.map(toMonthRequest))
     }
     fetchInitialData()
   }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
@@ -162,8 +178,8 @@ export default function RequestsPage() {
       unwrap(await saveMyMonthRequests(storeId, startOfMonth, entries))
       alert('保存しました！')
       window.location.reload()
-    } catch (err: any) {
-      alert('保存失敗: ' + err.message)
+    } catch (error) {
+      alert('保存失敗: ' + (error instanceof Error ? error.message : '通信エラー'))
     } finally { setIsSaving(false) }
   }
 
@@ -200,7 +216,7 @@ export default function RequestsPage() {
       currentRow.getCell(1).value = person.name
       currentRow.getCell(1).font = { bold: true, size: 11 }
       currentRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' }
-      currentRow.getCell(1).border = excelCellBorder as any
+      currentRow.getCell(1).border = excelCellBorder
 
       const staffOffCount = allRequests.filter(r => r.staff_id === person.id && r.is_off).length
 
@@ -212,7 +228,7 @@ export default function RequestsPage() {
         const isOff = Boolean(req?.is_off)
         const memoText = (req?.memo || '').trim()
 
-        cell.border = excelCellBorder as any
+        cell.border = excelCellBorder
         cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }
 
         if (isOff) {
@@ -233,7 +249,7 @@ export default function RequestsPage() {
 
       const countCell = currentRow.getCell(daysArray.length + 2)
       countCell.value = `${staffOffCount}日`
-      countCell.border = excelCellBorder as any
+      countCell.border = excelCellBorder
       countCell.alignment = { vertical: 'middle', horizontal: 'center' }
       countCell.font = { bold: true, size: 11 }
       countCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }
@@ -241,7 +257,7 @@ export default function RequestsPage() {
 
     for (let col = 1; col <= headerRow.cellCount; col += 1) {
       const cell = headerRow.getCell(col)
-      cell.border = excelCellBorder as any
+      cell.border = excelCellBorder
       cell.alignment = { horizontal: 'center', vertical: 'middle' }
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
       if (col >= 2 && col <= daysArray.length + 1) {

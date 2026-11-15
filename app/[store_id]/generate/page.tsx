@@ -9,8 +9,7 @@ import {
   saveMonthlyShift,
   saveParsedShiftRequest,
 } from '@/app/actions/generate'
-import { unwrap } from '@/lib/action-result'
-import { parseSkillOptions } from '@/lib/skill-options'
+import { unwrap, type DataRow } from '@/lib/action-result'
 import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -26,7 +25,7 @@ import {
   shiftHoursFromLabel,
   tToF,
   type GeneratedSchedule,
-  type GeneratedStaffShift,
+  type GeneratorStore,
   type ShiftRequest,
   type StaffRecord,
 } from '@/lib/shift-generator'
@@ -64,6 +63,36 @@ type GenerationSettingRow = {
   slots: unknown
 }
 
+type SlotTimes = { start: number; end: number }
+
+/** Store columns used by this screen (row from the server, typed). */
+type GenerateStoreInfo = GeneratorStore & {
+  group_options: string | null
+  target_mh_per_day: number | null
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const toStoreInfo = (row: DataRow): GenerateStoreInfo => ({
+  open_time: typeof row.open_time === 'string' ? row.open_time : null,
+  close_time: typeof row.close_time === 'string' ? row.close_time : null,
+  skill_options: row.skill_options,
+  group_options: typeof row.group_options === 'string' ? row.group_options : null,
+  target_mh_per_day: typeof row.target_mh_per_day === 'number' ? row.target_mh_per_day : null,
+})
+
+/** generation_settings.counts: group -> required people. Non-numeric entries are ignored. */
+const toCounts = (value: unknown): Record<string, number> => isPlainObject(value)
+  ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number'))
+  : {}
+
+/** generation_settings.slots: "group_index" -> hours. Malformed entries are ignored. */
+const toSlots = (value: unknown): Record<string, SlotTimes> => isPlainObject(value)
+  ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, SlotTimes] =>
+    isPlainObject(entry[1]) && typeof entry[1].start === 'number' && typeof entry[1].end === 'number'))
+  : {}
+
 type ActiveShiftCell = {
   staffId: string
   date: string
@@ -100,7 +129,7 @@ const dayTone = (dateStr: string) => {
 export default function GeneratePage() {
   const { store_id } = useParams()
   const router = useRouter()
-  const [storeInfo, setStoreInfo] = useState<any>(null)
+  const [storeInfo, setStoreInfo] = useState<GenerateStoreInfo | null>(null)
   const [activeTab, setActiveTab] = useState<string>('wd')
 
   const [viewDate, setViewDate] = useState(() => {
@@ -133,8 +162,8 @@ export default function GeneratePage() {
   const [scheduleView, setScheduleView] = useState<'week' | 'month'>('week')
   const closeShiftEditor = useCallback(() => setActiveCell(null), [])
 
-  const minTime = useMemo(() => tToF(storeInfo?.open_time), [storeInfo])
-  const maxTime = useMemo(() => tToF(storeInfo?.close_time), [storeInfo])
+  const minTime = useMemo(() => tToF(storeInfo?.open_time ?? undefined), [storeInfo])
+  const maxTime = useMemo(() => tToF(storeInfo?.close_time ?? undefined), [storeInfo])
   const groups = useMemo(() => storeInfo?.group_options?.split(',') || [], [storeInfo])
 
   useEffect(() => {
@@ -154,7 +183,7 @@ export default function GeneratePage() {
     try {
     // One admin-only server call: store settings, this month's draft and generation settings.
     const context = unwrap(await getGenerateContext(currentStoreId, targetMonthStr))
-    const sInfo = context.store
+    const sInfo = context.store ? toStoreInfo(context.store) : null
     if (sInfo) setStoreInfo(sInfo)
 
     const draftRow = context.draft
@@ -169,18 +198,18 @@ export default function GeneratePage() {
     }
 
     setIsDraftEdit(false)
-    const storeGroups = typeof sInfo?.group_options === 'string' ? sInfo.group_options.split(',') : []
+    const storeGroups = sInfo?.group_options ? sInfo.group_options.split(',') : []
 
     const currentSettings = context.settings as GenerationSettingRow[]
 
-    const newCounts: any = {}
-    const newSlots: any = {}
+    const newCounts: Record<string, Record<string, number>> = {}
+    const newSlots: Record<string, Record<string, SlotTimes>> = {}
     const specials: string[] = []
 
     if (currentSettings && currentSettings.length > 0) {
       currentSettings.forEach(set => {
-        newCounts[set.config_type] = set.counts
-        newSlots[set.config_type] = set.slots
+        newCounts[set.config_type] = toCounts(set.counts)
+        newSlots[set.config_type] = toSlots(set.slots)
         if (set.config_type !== 'wd' && set.config_type !== 'we') {
           specials.push(set.config_type)
         }
@@ -193,12 +222,12 @@ export default function GeneratePage() {
         const latestWe = pastSettings.find(s => s.config_type === 'we')
 
         if (latestWd) {
-          newCounts['wd'] = latestWd.counts
-          newSlots['wd'] = latestWd.slots
+          newCounts['wd'] = toCounts(latestWd.counts)
+          newSlots['wd'] = toSlots(latestWd.slots)
         }
         if (latestWe) {
-          newCounts['we'] = latestWe.counts
-          newSlots['we'] = latestWe.slots
+          newCounts['we'] = toCounts(latestWe.counts)
+          newSlots['we'] = toSlots(latestWe.slots)
         }
       } else {
         ;['wd', 'we'].forEach(t => {
@@ -278,8 +307,8 @@ export default function GeneratePage() {
       }))
       unwrap(await saveGenerationSettings(String(Array.isArray(store_id) ? store_id[0] : store_id), targetMonthStr, entries))
       alert('設定を保存しました！')
-    } catch (e: any) {
-      alert('保存失敗: ' + e.message)
+    } catch (error) {
+      alert('保存失敗: ' + (error instanceof Error ? error.message : '通信エラー'))
     } finally { setIsSaving(false) }
   }
 
@@ -810,7 +839,7 @@ export default function GeneratePage() {
 
       <div className="sticky top-4 z-30 mb-6 flex justify-end">
         <div className="rounded-md border border-[var(--border)] bg-white px-5 py-3 shadow-sm ring-1 ring-slate-200/80 backdrop-blur-sm">
-          <span className={`text-2xl font-bold ${currentTotalMH > storeInfo.target_mh_per_day ? 'text-red-600' : 'text-slate-800'}`}>
+          <span className={`text-2xl font-bold ${storeInfo.target_mh_per_day !== null && currentTotalMH > storeInfo.target_mh_per_day ? 'text-red-600' : 'text-slate-800'}`}>
             {currentTotalMH.toFixed(1)}H
           </span>
         </div>
