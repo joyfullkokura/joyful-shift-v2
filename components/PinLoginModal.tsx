@@ -5,6 +5,7 @@ import { Check, KeyRound, LockKeyhole, X } from 'lucide-react'
 import { changePin, completeInitialSetup as completeInitialSetupAction, loginWithPin, requestPinReset as requestPinResetAction, verifyCurrentPin } from '@/app/actions/auth'
 import type { LoginResult, PinCheckResult, SessionStaff, SetupDefaults } from '@/lib/auth-types'
 import { JOB_OPTIONS, TIME_OPTIONS } from '@/lib/staff-profile-options'
+import { queueFlashForNextScreen } from '@/components/FlashMessage'
 
 type PinLoginMode = 'setup' | 'login' | 'change'
 type PinStage = 'pin' | 'confirm' | 'current' | 'new' | 'profile'
@@ -97,6 +98,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState('')
   const [resetRequestMessage, setResetRequestMessage] = useState('')
+  const [isConfirmingReset, setIsConfirmingReset] = useState(false)
   const [targetWorkDays, setTargetWorkDays] = useState(() => getTargetWorkDays(defaults?.weekly_target_days))
   const [employmentType, setEmploymentType] = useState('part_time')
   const [mainJob, setMainJob] = useState(() => getMainJob(defaults?.main_job))
@@ -231,7 +233,8 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         return
       }
       if (result.employeeRequestPending) {
-        window.alert('雇用区分「社員」の権限は、店長が従業員名簿で設定した後に有効になります。それまではスタッフ権限でご利用ください。')
+        // Login replaces this screen right away, so the notice is shown on the next one.
+        queueFlashForNextScreen(storeId, '雇用区分「社員」の権限は、店長が従業員名簿で設定した後に有効になります。それまではスタッフ権限でご利用ください。')
       }
       onSuccess(result.staff)
     } catch {
@@ -274,8 +277,9 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
     return () => { isCurrent = false }
   }, [isProcessing, mode, onSuccess, pin, staff.id, stage, storeId])
 
+  /** Runs after the inline confirmation below the keypad. */
   const requestPinReset = useCallback(async () => {
-    if (!window.confirm('社員に暗証番号のリセットを申請しますか？')) return
+    setIsConfirmingReset(false)
     setError('')
     setResetRequestMessage('')
     setIsProcessing(true)
@@ -423,10 +427,19 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
             <button type="button" onClick={onClose} className="rounded-md border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">キャンセル</button>
             <button type="button" onClick={() => void submitCurrent()} disabled={isProcessing || activePin.length < MIN_PIN_LENGTH} className="rounded-md bg-slate-900 px-5 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{stage === 'confirm' ? '確認' : '次へ進む'}</button>
           </div>
-          {mode === 'login' && (
-            <button type="button" onClick={() => void requestPinReset()} disabled={isProcessing} className="mt-4 w-full text-center text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+          {mode === 'login' && !isConfirmingReset && (
+            <button type="button" onClick={() => { setIsConfirmingReset(true); setResetRequestMessage('') }} disabled={isProcessing} className="mt-4 w-full text-center text-xs text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
               暗証番号を忘れた場合は、社員にリセットを申請
             </button>
+          )}
+          {mode === 'login' && isConfirmingReset && (
+            <div role="group" aria-label="暗証番号のリセット申請" className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-700">社員に暗証番号のリセットを申請しますか？</p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => setIsConfirmingReset(false)} disabled={isProcessing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">キャンセル</button>
+                <button type="button" onClick={() => void requestPinReset()} disabled={isProcessing} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">申請する</button>
+              </div>
+            </div>
           )}
           <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">{isProcessing ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900" /> : <><Check size={14} />暗証番号はサーバーで安全に照合されます</>}</div>
           </div>}

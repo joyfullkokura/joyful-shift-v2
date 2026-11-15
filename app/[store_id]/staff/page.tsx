@@ -7,6 +7,8 @@ import { formatParsedConditions } from '@/lib/parsed-conditions'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
 import type { DataRow } from '@/lib/action-result'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import { useFlash } from '@/components/FlashMessage'
 
 /** One roster row as edited on this screen. Only these fields are sent back and saved. */
 type RosterStaff = {
@@ -60,6 +62,9 @@ export default function StaffPage() {
   const [isNewStaffSaving, setIsNewStaffSaving] = useState(false)
   const [skillOptions, setSkillOptions] = useState<string[]>([])
   const [suggestionTarget, setSuggestionTarget] = useState<{ personId: string; slot: 'slot1' | 'slot2' } | null>(null)
+  const [staffPendingDeletion, setStaffPendingDeletion] = useState<RosterStaff | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const { notify } = useFlash()
 
   // --- 1. データ読み込み（スタッフ名簿 ＋ 店舗のスキル設定） ---
   useEffect(() => {
@@ -69,21 +74,21 @@ export default function StaffPage() {
       // Loaded on the server (admin only) so pin_hash never reaches the browser.
       const result = await getStaffPageData(storeId)
       if (!result.ok) {
-        alert('名簿を読み込めませんでした: ' + result.error)
+        notify('名簿を読み込めませんでした: ' + result.error, 'error')
         return
       }
       setStaff(result.data.staff.map(toRosterStaff))
       setSkillOptions(parseSkillOptions(result.data.skillOptions))
     }
     fetchData()
-  }, [storeId])
+  }, [notify, storeId])
 
   // --- 2. 新規登録処理 ---
   const handleAddStaff = async () => {
     if (!newName.trim()) return
     setIsSubmitting(true)
     const result = await addStaff(storeId, newName)
-    if (!result.ok) alert('登録失敗: ' + result.error)
+    if (!result.ok) notify('登録できませんでした: ' + result.error, 'error')
     else {
       setStaff(result.data.staff.map(toRosterStaff))
       setNewStaffId(result.data.id)
@@ -114,18 +119,23 @@ export default function StaffPage() {
     setIsBulkSaving(true)
     // Only editable fields of this store's existing staff are written (checked on the server).
     const result = await saveStaffRoster(storeId, staff)
-    if (!result.ok) alert('保存失敗: ' + result.error)
-    else alert('すべての変更を保存しました！')
+    if (!result.ok) notify('保存できませんでした: ' + result.error, 'error')
+    else notify('すべての変更を保存しました。')
     setIsBulkSaving(false)
   }
 
-  const handleDeleteStaff = async (id: string) => {
-    const result = await deleteStaff(storeId, id)
+  /** Runs after the in-page confirmation (ConfirmDialog). */
+  const handleDeleteStaff = async (person: RosterStaff) => {
+    setIsDeleting(true)
+    const result = await deleteStaff(storeId, person.id)
+    setIsDeleting(false)
+    setStaffPendingDeletion(null)
     if (!result.ok) {
-      alert('削除失敗: ' + result.error)
+      notify('削除できませんでした: ' + result.error, 'error')
       return
     }
-    setStaff(prev => prev.filter(person => person.id !== id))
+    setStaff(prev => prev.filter(item => item.id !== person.id))
+    notify(`${person.name || 'スタッフ'}さんを名簿から削除しました。`)
   }
 
   const handleSaveNewStaffDetails = async () => {
@@ -136,7 +146,7 @@ export default function StaffPage() {
     // The server saves the row and re-runs the AI condition analysis in the background.
     const result = await saveStaffMember(storeId, newStaff)
     if (!result.ok) {
-      alert('詳細の保存に失敗しました: ' + result.error)
+      notify('詳細を保存できませんでした: ' + result.error, 'error')
     } else {
       setNewStaffId(null)
     }
@@ -197,6 +207,16 @@ export default function StaffPage() {
 
   return (
     <div className="max-w-6xl p-4 pb-32 md:p-8">
+      <ConfirmDialog
+        open={staffPendingDeletion !== null}
+        tone="danger"
+        title="スタッフを削除しますか？"
+        message={`${staffPendingDeletion?.name || 'このスタッフ'}さんを名簿から削除します。この操作は取り消せません。`}
+        confirmLabel="削除する"
+        isProcessing={isDeleting}
+        onConfirm={() => { if (staffPendingDeletion) void handleDeleteStaff(staffPendingDeletion) }}
+        onCancel={() => setStaffPendingDeletion(null)}
+      />
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl font-bold text-[var(--text)]">{storeId}店 スタッフ一覧</h1>
         {isAdmin && (
@@ -494,7 +514,8 @@ export default function StaffPage() {
 
                   {isAdmin && (
                     <button
-                      onClick={() => handleDeleteStaff(person.id)}
+                      type="button"
+                      onClick={() => setStaffPendingDeletion(person)}
                       className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:border-red-300 hover:text-red-600"
                     >
                       削除

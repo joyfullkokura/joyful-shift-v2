@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { AdminProvider } from '@/context/AdminContext'
 import StoreShell from '@/components/StoreShell'
+import { FlashProvider } from '@/components/FlashMessage'
 import type { LoginMember, SessionStaff } from '@/lib/auth-types'
 import { getSessionStaff, getStoreName, listLoginMembers } from '@/lib/server/dal'
 
@@ -25,9 +26,11 @@ export default async function StoreLayout({ children, params }: { children: Reac
   return (
     // Remount when the server-side session changes (login, logout, PIN change).
     <AdminProvider key={session?.id ?? 'guest'} storeId={storeId} initialStaff={session}>
-      <StoreShell storeId={storeId} storeName={storeName} members={members} loadError={loadError}>
-        {children}
-      </StoreShell>
+      <FlashProvider storeId={storeId}>
+        <StoreShell storeId={storeId} storeName={storeName} members={members} loadError={loadError}>
+          {children}
+        </StoreShell>
+      </FlashProvider>
     </AdminProvider>
   )
 }

@@ -8,6 +8,7 @@ import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
 import { useAdmin } from '@/context/AdminContext'
+import { useFlash } from '@/components/FlashMessage'
 
 const getDateKind = (dateStr: string) => {
   const date = new Date(`${dateStr}T00:00:00`)
@@ -61,6 +62,9 @@ export default function RequestsPage() {
   const [requests, setRequests] = useState<{[key: string]: {is_off: boolean, memo: string}}>({})
   const [activeDate, setActiveDate] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  // Bumped after saving to re-read the month instead of reloading the page.
+  const [reloadKey, setReloadKey] = useState(0)
+  const { notify } = useFlash()
   const [allRequests, setAllRequests] = useState<MonthRequest[]>([])
 
   const now = new Date()
@@ -89,7 +93,7 @@ export default function RequestsPage() {
       setAllRequests(result.data.requests.map(toMonthRequest))
     }
     fetchInitialData()
-  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth])
+  }, [storeId, viewDate, targetYear, targetMonth, daysInMonth, reloadKey])
 
   useEffect(() => {
     if (selectedStaff) {
@@ -105,7 +109,7 @@ export default function RequestsPage() {
       }
       fetchRequests()
     }
-  }, [selectedStaff, storeId, targetYear, targetMonth])
+  }, [selectedStaff, storeId, targetYear, targetMonth, reloadKey])
 
   const handleDateClick = (dateStr: string) => {
     if (isReadOnly) return
@@ -130,10 +134,10 @@ export default function RequestsPage() {
         .filter(([, val]) => val.is_off || val.memo.trim() !== '')
         .map(([date, val]) => ({ date, is_off: val.is_off, memo: val.memo }))
       unwrap(await saveMyMonthRequests(storeId, startOfMonth, entries))
-      alert('保存しました！')
-      window.location.reload()
+      notify(`${targetMonth}月の休み希望を保存しました。`)
+      setReloadKey(key => key + 1)
     } catch (error) {
-      alert('保存失敗: ' + (error instanceof Error ? error.message : '通信エラー'))
+      notify('保存できませんでした: ' + (error instanceof Error ? error.message : '通信エラー'), 'error')
     } finally { setIsSaving(false) }
   }
 

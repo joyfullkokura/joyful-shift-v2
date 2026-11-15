@@ -15,6 +15,8 @@ import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 import ShiftTimeEditor from '@/components/ShiftTimeEditor'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import { useFlash } from '@/components/FlashMessage'
 import {
   actualHoursForShifts,
   calculateActualHours,
@@ -117,6 +119,8 @@ const dayTone = (dateStr: string) => {
 export default function GeneratePage() {
   const { store_id } = useParams()
   const router = useRouter()
+  const { notify } = useFlash()
+  const [pendingDraftConfirmation, setPendingDraftConfirmation] = useState<'discard' | 'publish' | null>(null)
   const [storeInfo, setStoreInfo] = useState<GenerateStoreInfo | null>(null)
   const [activeTab, setActiveTab] = useState<string>('wd')
 
@@ -294,9 +298,9 @@ export default function GeneratePage() {
         slots: slots[type] || {},
       }))
       unwrap(await saveGenerationSettings(String(Array.isArray(store_id) ? store_id[0] : store_id), targetMonthStr, entries))
-      alert('設定を保存しました！')
+      notify('設定を保存しました。')
     } catch (error) {
-      alert('保存失敗: ' + (error instanceof Error ? error.message : '通信エラー'))
+      notify('設定を保存できませんでした: ' + (error instanceof Error ? error.message : '通信エラー'), 'error')
     } finally { setIsSaving(false) }
   }
 
@@ -464,8 +468,10 @@ export default function GeneratePage() {
     }
   }
 
+  /** Runs after the in-page confirmation (ConfirmDialog). */
   const discardDraft = async () => {
-    if (!window.confirm('現在の編集内容を破棄して、AI生成の設定画面に戻りますか？') || !store_id) return
+    setPendingDraftConfirmation(null)
+    if (!store_id) return
     const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
     setDraftAction('discard')
     setDraftError('')
@@ -482,9 +488,10 @@ export default function GeneratePage() {
     }
   }
 
+  /** Runs after the in-page confirmation (ConfirmDialog). */
   const confirmDraft = async () => {
+    setPendingDraftConfirmation(null)
     if (!generatedSchedule || !store_id) return
-    if (!window.confirm('このシフトを確定して公開しますか？')) return
     const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
     setDraftAction('confirm')
     setDraftError('')
@@ -494,7 +501,8 @@ export default function GeneratePage() {
         alerts: currentScheduleAlerts,
         vacancyCount: currentVacancyCount,
       }))
-      alert('シフトを確定・公開しました！')
+      // The flash message lives in the store layout, so it stays visible after navigating.
+      notify(`${targetMonth}月のシフトを確定・公開しました。`)
       router.push(`/${encodeURIComponent(currentStoreId)}/view`)
     } catch (error) {
       setDraftError(`シフトを確定できませんでした: ${error instanceof Error ? error.message : '通信エラー'}`)
@@ -550,16 +558,33 @@ export default function GeneratePage() {
               <button type="button" onClick={saveDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:text-sm">
                 <Save size={16} /> {draftAction === 'save' ? '保存中...' : 'いったん保存'}
               </button>
-              <button type="button" onClick={discardDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60 sm:text-sm">
+              <button type="button" onClick={() => setPendingDraftConfirmation('discard')} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-60 sm:text-sm">
                 <Trash2 size={16} /> {draftAction === 'discard' ? '破棄中...' : '破棄して生成し直す'}
               </button>
-              <button type="button" onClick={confirmDraft} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60 sm:text-sm">
+              <button type="button" onClick={() => setPendingDraftConfirmation('publish')} disabled={draftAction !== null} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-60 sm:text-sm">
                 <Rocket size={16} /> {draftAction === 'confirm' ? '確定中...' : 'この案をベースに確定'}
               </button>
             </div>
           </div>
         </header>
 
+        <ConfirmDialog
+          open={pendingDraftConfirmation === 'discard'}
+          tone="danger"
+          title="下書きを破棄しますか？"
+          message="現在の編集内容を破棄して、AI生成の設定画面に戻ります。この操作は取り消せません。"
+          confirmLabel="破棄する"
+          onConfirm={() => void discardDraft()}
+          onCancel={() => setPendingDraftConfirmation(null)}
+        />
+        <ConfirmDialog
+          open={pendingDraftConfirmation === 'publish'}
+          title="シフトを確定して公開しますか？"
+          message={`${targetMonth}月のシフトを確定し、スタッフ全員に公開します。`}
+          confirmLabel="確定して公開"
+          onConfirm={() => void confirmDraft()}
+          onCancel={() => setPendingDraftConfirmation(null)}
+        />
         {draftNotice && <p role="status" className="mb-4 text-sm text-slate-600">{draftNotice}</p>}
         {(draftError || confirmError) && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{draftError || confirmError}</p>}
 
