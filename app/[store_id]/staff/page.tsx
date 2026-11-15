@@ -252,7 +252,7 @@ export default function StaffPage() {
                     ? `${newlyAddedStaff.work_start_1.slice(0, 5)} - ${newlyAddedStaff.work_end_1.slice(0, 5)}`
                     : '表示例を確認'}
                 </button>
-                {suggestionTarget?.personId === newlyAddedStaff.id && suggestionTarget.slot === 'slot1' && (
+                {suggestionTarget?.personId === newlyAddedStaff.id && suggestionTarget?.slot === 'slot1' && (
                   <div className="mt-2 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
                     {getWorkTimeSuggestions(newlyAddedStaff, 'slot1').length > 0 ? (
                       getWorkTimeSuggestions(newlyAddedStaff, 'slot1').map((option) => (
@@ -310,7 +310,7 @@ export default function StaffPage() {
                     ? `${newlyAddedStaff.work_start_2.slice(0, 5)} - ${newlyAddedStaff.work_end_2.slice(0, 5)}`
                     : '表示例を確認'}
                 </button>
-                {suggestionTarget?.personId === newlyAddedStaff.id && suggestionTarget.slot === 'slot2' && (
+                {suggestionTarget?.personId === newlyAddedStaff.id && suggestionTarget?.slot === 'slot2' && (
                   <div className="mt-2 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
                     {getWorkTimeSuggestions(newlyAddedStaff, 'slot2').length > 0 ? (
                       getWorkTimeSuggestions(newlyAddedStaff, 'slot2').map((option) => (
@@ -365,7 +365,7 @@ export default function StaffPage() {
             ?.split(/\s|・/)
             .filter(Boolean)
             .slice(0, 2)
-            .map(part => part[0])
+            .map((part: string) => part[0])
             .join('')
             .slice(0, 2)
             .toUpperCase() || 'N'
@@ -492,7 +492,7 @@ export default function StaffPage() {
                               : '表示例を確認'}
                           </button>
 
-                          {suggestionTarget?.personId === person.id && suggestionTarget.slot === 'slot1' && (
+                          {suggestionTarget?.personId === person.id && suggestionTarget?.slot === 'slot1' && (
                             <div className="w-full rounded border border-slate-200 bg-white p-2 shadow-lg">
                               {slot1Suggestions.length > 0 ? (
                                 slot1Suggestions.map((option) => (
@@ -554,7 +554,7 @@ export default function StaffPage() {
                               : '表示例を確認'}
                           </button>
 
-                          {suggestionTarget?.personId === person.id && suggestionTarget.slot === 'slot2' && (
+                          {suggestionTarget?.personId === person.id && suggestionTarget?.slot === 'slot2' && (
                             <div className="w-full rounded border border-slate-200 bg-white p-2 shadow-lg">
                               {slot2Suggestions.length > 0 ? (
                                 slot2Suggestions.map((option) => (

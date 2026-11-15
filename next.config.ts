@@ -1,11 +1,5 @@
-/** @type {import('next').NextConfig} */
-const nextConfig: any = {  // : any を付けることで赤い波線を強制的に消します
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-};
+import type { NextConfig } from 'next'
 
-export default nextConfig;
+const nextConfig: NextConfig = {}
+
+export default nextConfig
