@@ -10,6 +10,7 @@ import {
   saveParsedShiftRequest,
 } from '@/app/actions/generate'
 import { unwrap, type DataRow } from '@/lib/action-result'
+import { getHolidayName, holidaysOfYear, isHoliday } from '@/lib/holidays'
 import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -29,19 +30,6 @@ import {
   type ShiftRequest,
   type StaffRecord,
 } from '@/lib/shift-generator'
-
-const HOLIDAYS: { [key: string]: string } = {
-  '2026-01-01': '元日', '2026-01-12': '成人の日', '2026-02-11': '建国記念の日', '2026-02-23': '天皇誕生日',
-  '2026-03-21': '春分の日', '2026-04-29': '昭和の日', '2026-05-03': '憲法記念日', '2026-05-04': 'みどりの日',
-  '2026-05-05': 'こどもの日', '2026-05-06': '振替休日', '2026-07-20': '海の日', '2026-08-11': '山の日',
-  '2026-09-21': '敬老の日', '2026-09-22': '国民の休日', '2026-09-23': '秋分の日', '2026-10-12': 'スポーツの日',
-  '2026-11-03': '文化の日', '2026-11-23': '勤労感謝の日',
-  '2027-01-01': '元日', '2027-01-11': '成人の日', '2027-02-11': '建国記念の日', '2027-02-23': '天皇誕生日',
-  '2027-03-21': '春分の日', '2027-03-22': '振替休日', '2027-04-29': '昭和の日', '2027-05-03': '憲法記念日',
-  '2027-05-04': 'みどりの日', '2027-05-05': 'こどもの日', '2027-07-19': '海の日', '2027-08-11': '山の日',
-  '2027-09-20': '敬老の日', '2027-09-23': '秋分の日', '2027-10-11': 'スポーツの日', '2027-11-03': '文化の日',
-  '2027-11-23': '勤労感謝の日',
-}
 
 const ROLE_COLORS = [
   { bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200', bar: 'bg-slate-700', thumb: 'border-slate-700' },
@@ -121,7 +109,7 @@ const fulfillmentPercent = (
 
 const dayTone = (dateStr: string) => {
   const weekDay = new Date(`${dateStr}T00:00:00`).getDay()
-  if (weekDay === 0 || HOLIDAYS[dateStr]) return 'text-rose-600'
+  if (weekDay === 0 || isHoliday(dateStr)) return 'text-rose-600'
   if (weekDay === 6) return 'text-sky-600'
   return 'text-slate-600'
 }
@@ -384,7 +372,7 @@ export default function GeneratePage() {
       slots,
       selectedSpecialDays,
       monthlyTargetHours,
-      holidays: HOLIDAYS,
+      holidays: holidaysOfYear(targetYear),
     })
     setGeneratedSchedule(schedule)
   }
@@ -784,7 +772,7 @@ export default function GeneratePage() {
               {Array.from({ length: daysInMonth }).map((_, i) => {
                 const day = i + 1
                 const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                const holidayName = HOLIDAYS[dateStr]
+                const holidayName = getHolidayName(dateStr)
                 const isSelected = selectedSpecialDays.includes(dateStr)
                 const weekDay = new Date(targetYear, targetMonth - 1, day).getDay()
                 const isRedDay = weekDay === 0 || holidayName

@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { CalendarDays, ChevronLeft, ChevronRight, Printer, Users, Clock3, X } from 'lucide-react'
 import { getConfirmedSchedule } from '@/app/actions/schedule'
 import { unwrap } from '@/lib/action-result'
+import { getHolidayName } from '@/lib/holidays'
 import { useAdmin } from '@/context/AdminContext'
 
 type ShiftStaff = {
@@ -30,19 +31,6 @@ type ConfirmedShiftRow = {
   schedule_data?: unknown
   schedule?: unknown
   shifts?: unknown
-}
-
-const HOLIDAYS: Record<string, string> = {
-  '2026-01-01': '元日', '2026-01-12': '成人の日', '2026-02-11': '建国記念の日', '2026-02-23': '天皇誕生日',
-  '2026-03-21': '春分の日', '2026-04-29': '昭和の日', '2026-05-03': '憲法記念日', '2026-05-04': 'みどりの日',
-  '2026-05-05': 'こどもの日', '2026-05-06': '振替休日', '2026-07-20': '海の日', '2026-08-11': '山の日',
-  '2026-09-21': '敬老の日', '2026-09-22': '国民の休日', '2026-09-23': '秋分の日', '2026-10-12': 'スポーツの日',
-  '2026-11-03': '文化の日', '2026-11-23': '勤労感謝の日',
-  '2027-01-01': '元日', '2027-01-11': '成人の日', '2027-02-11': '建国記念の日', '2027-02-23': '天皇誕生日',
-  '2027-03-21': '春分の日', '2027-03-22': '振替休日', '2027-04-29': '昭和の日', '2027-05-03': '憲法記念日',
-  '2027-05-04': 'みどりの日', '2027-05-05': 'こどもの日', '2027-07-19': '海の日', '2027-08-11': '山の日',
-  '2027-09-20': '敬老の日', '2027-09-23': '秋分の日', '2027-10-11': 'スポーツの日', '2027-11-03': '文化の日',
-  '2027-11-23': '勤労感謝の日',
 }
 
 const isConfirmedSchedule = (value: unknown): value is ConfirmedSchedule => {
@@ -202,7 +190,7 @@ export default function ViewShiftPage() {
                 {dates.map(date => {
                   const day = Number(date.slice(-2))
                   const weekday = new Date(year, month - 1, day).getDay()
-                  const holiday = HOLIDAYS[date]
+                  const holiday = getHolidayName(date)
                   const shift = currentPerson.shifts?.[date] || ''
                   const isOff = shift === '×' || !shift
                   const tone = isOff
@@ -239,7 +227,7 @@ export default function ViewShiftPage() {
                   {dates.map(date => {
                     const day = Number(date.slice(-2))
                     const weekday = new Date(year, month - 1, day).getDay()
-                    const holiday = HOLIDAYS[date]
+                    const holiday = getHolidayName(date)
                     const dayClass = weekday === 0 || holiday
                       ? 'bg-red-50/40 text-red-600'
                       : weekday === 6
@@ -266,7 +254,7 @@ export default function ViewShiftPage() {
                     {dates.map(date => {
                       const day = Number(date.slice(-2))
                       const weekday = new Date(year, month - 1, day).getDay()
-                      const holiday = HOLIDAYS[date]
+                      const holiday = getHolidayName(date)
                       const shift = person.shifts?.[date] || ''
                       const cellClass = shift === '×'
                         ? 'bg-red-50/70 font-medium text-red-500'

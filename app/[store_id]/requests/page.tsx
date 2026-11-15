@@ -3,62 +3,16 @@
 import { useEffect, useState } from 'react'
 import { getMyMonthRequests, getRequestsMonth, saveMyMonthRequests } from '@/app/actions/requests'
 import { unwrap, type DataRow } from '@/lib/action-result'
+import { getHolidayName, isHoliday } from '@/lib/holidays'
 import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
 import { useAdmin } from '@/context/AdminContext'
 
-const HOLIDAY_MAP_2026: Record<string, string> = {
-  '2026-01-01': '元日',
-  '2026-01-12': '成人の日',
-  '2026-02-11': '建国記念の日',
-  '2026-02-23': '天皇誕生日',
-  '2026-03-21': '春分の日',
-  '2026-04-29': '昭和の日',
-  '2026-05-03': '憲法記念日',
-  '2026-05-04': 'みどりの日',
-  '2026-05-05': 'こどもの日',
-  '2026-05-06': '振替休日',
-  '2026-07-20': '海の日',
-  '2026-08-11': '山の日',
-  '2026-09-21': '敬老の日',
-  '2026-09-22': '国民の休日',
-  '2026-09-23': '秋分の日',
-  '2026-10-12': 'スポーツの日',
-  '2026-11-03': '文化の日',
-  '2026-11-23': '勤労感謝の日',
-}
-
-const getHolidayMap = (year: number) => {
-  const map: Record<string, string> = { ...HOLIDAY_MAP_2026 }
-  if (year === 2027) {
-    Object.assign(map, {
-      '2027-01-01': '元日',
-      '2027-01-11': '成人の日',
-      '2027-02-11': '建国記念の日',
-      '2027-02-23': '天皇誕生日',
-      '2027-03-21': '春分の日',
-      '2027-04-29': '昭和の日',
-      '2027-05-03': '憲法記念日',
-      '2027-05-04': 'みどりの日',
-      '2027-05-05': 'こどもの日',
-      '2027-07-19': '海の日',
-      '2027-08-11': '山の日',
-      '2027-09-20': '敬老の日',
-      '2027-09-23': '秋分の日',
-      '2027-10-11': 'スポーツの日',
-      '2027-11-03': '文化の日',
-      '2027-11-23': '勤労感謝の日',
-    })
-  }
-  return map
-}
-
-const getDateKind = (dateStr: string, year: number) => {
-  const holidayMap = getHolidayMap(year)
+const getDateKind = (dateStr: string) => {
   const date = new Date(`${dateStr}T00:00:00`)
   const weekday = date.getDay()
-  if (holidayMap[dateStr]) return 'holiday'
+  if (isHoliday(dateStr)) return 'holiday'
   if (weekday === 0) return 'sunday'
   if (weekday === 6) return 'saturday'
   return 'weekday'
@@ -224,7 +178,7 @@ export default function RequestsPage() {
         const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
         const req = allRequests.find(r => r.staff_id === person.id && r.date === dateStr)
         const cell = currentRow.getCell(dayIdx + 2)
-        const dateKind = getDateKind(dateStr, targetYear)
+        const dateKind = getDateKind(dateStr)
         const isOff = Boolean(req?.is_off)
         const memoText = (req?.memo || '').trim()
 
@@ -263,7 +217,7 @@ export default function RequestsPage() {
       if (col >= 2 && col <= daysArray.length + 1) {
         const day = col - 1
         const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-        const dateKind = getDateKind(dateStr, targetYear)
+        const dateKind = getDateKind(dateStr)
         if (dateKind === 'holiday' || dateKind === 'sunday') {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } }
           cell.font = { bold: true, color: { argb: 'FFFF0000' }, size: 10 }
@@ -385,13 +339,13 @@ export default function RequestsPage() {
                 <th className="sticky left-0 z-20 w-[112px] min-w-[112px] border border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold text-slate-700">スタッフ名</th>
                 {daysArray.map(day => {
                   const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                  const dateKind = getDateKind(dateStr, targetYear)
+                  const dateKind = getDateKind(dateStr)
                   const headerClass = dateKind === 'holiday' || dateKind === 'sunday'
                     ? 'bg-red-50/40 text-red-600'
                     : dateKind === 'saturday'
                       ? 'bg-blue-50/40 text-blue-600'
                       : 'bg-slate-50 text-slate-600'
-                  return <th key={dateStr} title={getHolidayMap(targetYear)[dateStr]} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
+                  return <th key={dateStr} title={getHolidayName(dateStr) ?? undefined} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
                 })}
                 <th className="w-[76px] min-w-[76px] border border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">希望日数</th>
               </tr>
@@ -410,7 +364,7 @@ export default function RequestsPage() {
                       const request = allRequests.find(row => row.staff_id === person.id && row.date === dateStr)
                       const isOff = Boolean(request?.is_off)
                       const hasMemo = Boolean((request?.memo || '').trim())
-                      const dateKind = getDateKind(dateStr, targetYear)
+                      const dateKind = getDateKind(dateStr)
                       const dateTint = dateKind === 'holiday' || dateKind === 'sunday'
                         ? 'bg-red-50/20'
                         : dateKind === 'saturday'
