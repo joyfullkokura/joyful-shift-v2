@@ -81,3 +81,29 @@ select p.oid::regprocedure as function_name, r as role
   join pg_namespace n on n.oid = p.pronamespace,
        (values ('anon'), ('authenticated')) v(r)
  where n.nspname = 'public' and has_function_privilege(r, p.oid, 'EXECUTE');
+
+-- 7) Migration C (shift_requests one row per staff member and day).
+--    BEFORE: must return zero rows (otherwise the unique constraint cannot be added).
+select store_id, staff_id, date, count(*) as rows
+  from public.shift_requests
+ group by store_id, staff_id, date
+having count(*) > 1
+ order by rows desc
+ limit 50;
+
+--    AFTER: the constraint exists, the new columns are there, and only the
+--    service role can use them (expected: service_role true / true, others false / false).
+select conname from pg_constraint
+ where conrelid = 'public.shift_requests'::regclass and conname = 'shift_requests_store_staff_date_key';
+
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public' and table_name = 'shift_requests'
+   and column_name in ('parse_error', 'parsed_at');
+
+select r as role,
+       has_column_privilege(r, 'public.shift_requests', 'parse_error', 'SELECT')
+         and has_column_privilege(r, 'public.shift_requests', 'parsed_at', 'SELECT') as can_select,
+       has_column_privilege(r, 'public.shift_requests', 'parse_error', 'UPDATE')
+         and has_column_privilege(r, 'public.shift_requests', 'parsed_at', 'UPDATE') as can_update
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
