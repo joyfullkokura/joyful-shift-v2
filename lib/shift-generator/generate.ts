@@ -1,10 +1,10 @@
 import { parseSkillOptions } from '@/lib/skill-options'
 import { calculateScheduleAlerts } from './alerts'
-import { assignInitialSlots } from './assign'
+import { assignInitialSlots, type SlotDecision } from './assign'
 import { splitList, type GenerationContext } from './context'
-import { balanceEmployeeHours } from './employee-hours'
+import { balanceEmployeeHours, type EmployeeHoursAdjustment } from './employee-hours'
 import { compareStaffOrder, getJobOptions, jobForGroup } from './jobs'
-import { fillGapsWithRelays } from './relay'
+import { fillGapsWithRelays, type RelayAdjustment } from './relay'
 import { actualHoursForShifts, tToF, toTimeRange } from './time'
 import type { GeneratedSchedule, GeneratedStaffShift, GeneratorInput, ShiftRequest } from './types'
 
@@ -44,6 +44,28 @@ const createContext = (input: GeneratorInput): GenerationContext => {
   }
 }
 
+/** Why the plan looks the way it does; also the basis for comparing plans. */
+export type GenerationDecisions = {
+  /** First pass: every slot with all eligible candidates (best first) and their score breakdowns. */
+  slots: SlotDecision[]
+  /** Later passes, in the order they were applied. */
+  adjustments: Array<RelayAdjustment | EmployeeHoursAdjustment>
+  summary: {
+    /** Slots fully uncovered after all passes (same as schedule.vacancyCount). */
+    vacancyCount: number
+    skillAlertCount: number
+    /** Slots that had no eligible candidate in the first pass. */
+    unfilledInFirstPass: number
+    /** Sum of the winning candidates' total scores in the first pass. */
+    totalSelectedScore: number
+  }
+}
+
+export type ShiftPlan = {
+  schedule: GeneratedSchedule
+  decisions: GenerationDecisions
+}
+
 /**
  * Builds a month schedule. Pure: same input, same output; no I/O, no randomness.
  *
@@ -51,13 +73,13 @@ const createContext = (input: GeneratorInput): GenerationContext => {
  * 2. fillGapsWithRelays   - extend colleagues' shifts into uncovered parts of slots
  * 3. balanceEmployeeHours - move employees toward their monthly hour target
  */
-export const generateSchedule = (input: GeneratorInput): GeneratedSchedule => {
+export const generateShiftPlan = (input: GeneratorInput): ShiftPlan => {
   const context = createContext(input)
   const { scheduleStaff } = context
 
-  const { assignmentsByDate } = assignInitialSlots(context)
-  fillGapsWithRelays(context, assignmentsByDate)
-  balanceEmployeeHours(context, assignmentsByDate)
+  const { assignmentsByDate, decisions: slotDecisions } = assignInitialSlots(context)
+  const relayAdjustments = fillGapsWithRelays(context, assignmentsByDate)
+  const employeeAdjustments = balanceEmployeeHours(context, assignmentsByDate)
 
   scheduleStaff.forEach(staff => {
     staff.assignedHours = actualHoursForShifts(staff.shifts)
@@ -87,5 +109,21 @@ export const generateSchedule = (input: GeneratorInput): GeneratedSchedule => {
   }
   schedule.alerts = calculateScheduleAlerts(schedule, input.targetMonth)
   schedule.vacancyCount = schedule.alerts.filter(alert => alert.type === 'vacancy').length
-  return schedule
+
+  return {
+    schedule,
+    decisions: {
+      slots: slotDecisions,
+      adjustments: [...relayAdjustments, ...employeeAdjustments],
+      summary: {
+        vacancyCount: schedule.vacancyCount,
+        skillAlertCount: schedule.alerts.filter(alert => alert.type === 'skill').length,
+        unfilledInFirstPass: slotDecisions.filter(decision => decision.selectedStaffId === null).length,
+        totalSelectedScore: slotDecisions.reduce((total, decision) => total + (decision.candidates[0]?.score ?? 0), 0),
+      },
+    },
+  }
 }
+
+/** The schedule only (what the generate screen shows and saves). */
+export const generateSchedule = (input: GeneratorInput): GeneratedSchedule => generateShiftPlan(input).schedule
