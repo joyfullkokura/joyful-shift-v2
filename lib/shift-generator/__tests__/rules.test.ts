@@ -5,7 +5,7 @@ import {
   OVER_TARGET_PENALTY_PER_DAY,
   RESCUE_BOOST,
   STREAK_PENALTY,
-  WEEKEND_FATIGUE_PENALTY_PER_SHIFT,
+  WEEKEND_FAIRNESS_PENALTY_PER_SHIFT,
   scoreCandidate,
   type CandidateFactors,
 } from '../scoring'
@@ -156,21 +156,21 @@ describe('連勤ペナルティ', () => {
   })
 })
 
-describe('週末疲労ペナルティ', () => {
+describe('土日勤務の公平さ', () => {
   it('is -30 per weekend / holiday shift already worked', () => {
-    expect(scoreCandidate(factors({ previousWeekendShifts: 0 })).weekendFatigue).toBeCloseTo(0, 10)
-    expect(scoreCandidate(factors({ previousWeekendShifts: 3 })).weekendFatigue).toBe(3 * WEEKEND_FATIGUE_PENALTY_PER_SHIFT)
+    expect(scoreCandidate(factors({ previousWeekendShifts: 0 })).weekendFairness).toBeCloseTo(0, 10)
+    expect(scoreCandidate(factors({ previousWeekendShifts: 3 })).weekendFairness).toBe(3 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT)
   })
 
   it('counts earlier weekend and holiday shifts of the month, and only on weekend / holiday days', () => {
     // March 2026: 1 (Sun), 7-8, 14-15 ... ; a test holiday on Wed 4th.
     const plan = generateShiftPlan(hallInput({ staff: [staffMember({ id: 'solo' })], holidays: { [dateKey(2026, 3, 4)]: 'テスト祝日' } }))
-    const fatigueOn = (day: number) => breakdownOn(plan, dateKey(2026, 3, day), 'solo')?.weekendFatigue
-    expect(fatigueOn(1)).toBeCloseTo(0, 10) // first weekend day of the month
-    expect(fatigueOn(2)).toBeCloseTo(0, 10) // Monday
-    expect(fatigueOn(4)).toBe(1 * WEEKEND_FATIGUE_PENALTY_PER_SHIFT) // holiday after Sun 1st
-    expect(fatigueOn(7)).toBe(2 * WEEKEND_FATIGUE_PENALTY_PER_SHIFT) // Sat after 1st and 4th
-    expect(fatigueOn(8)).toBe(3 * WEEKEND_FATIGUE_PENALTY_PER_SHIFT)
-    expect(fatigueOn(9)).toBeCloseTo(0, 10) // Monday
+    const fairnessOn = (day: number) => breakdownOn(plan, dateKey(2026, 3, day), 'solo')?.weekendFairness
+    expect(fairnessOn(1)).toBeCloseTo(0, 10) // first weekend day of the month
+    expect(fairnessOn(2)).toBeCloseTo(0, 10) // Monday
+    expect(fairnessOn(4)).toBe(1 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT) // holiday after Sun 1st
+    expect(fairnessOn(7)).toBe(2 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT) // Sat after 1st and 4th
+    expect(fairnessOn(8)).toBe(3 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT)
+    expect(fairnessOn(9)).toBeCloseTo(0, 10) // Monday
   })
 })

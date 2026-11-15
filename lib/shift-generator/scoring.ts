@@ -8,7 +8,12 @@ export const OVER_TARGET_PENALTY_PER_DAY = -150
 export const STREAK_PENALTY = -500
 /** A staff member's 3rd consecutive working day triggers STREAK_PENALTY. */
 export const STREAK_LENGTH = 3
-export const WEEKEND_FATIGUE_PENALTY_PER_SHIFT = -30
+/**
+ * 土日勤務の公平さ: deducted per weekend / holiday shift the candidate already worked
+ * this month, so weekend and holiday shifts are spread evenly across staff over
+ * the month. Cumulative from the 1st on purpose (fairness, not recovery time).
+ */
+export const WEEKEND_FAIRNESS_PENALTY_PER_SHIFT = -30
 /** Deducted per uncovered quarter hour of the slot. */
 export const TIME_SHORTFALL_PENALTY_PER_QUARTER_HOUR = 15
 
@@ -29,7 +34,7 @@ export type CandidateFactors = {
   overlappingRanks: Array<string | null | undefined>
   /** Hours of the slot the candidate cannot cover. */
   shortfall: number
-  /** Weekend / holiday shifts already worked this month; 0 when the day is a weekday. */
+  /** Weekend / holiday shifts already worked this month (土日勤務の公平さ); 0 when the day is a weekday. */
   previousWeekendShifts: number
 }
 
@@ -45,8 +50,8 @@ export type ScoreBreakdown = {
   /** Rank bonus, tripled when the overlapping crew is weak. */
   rank: number
   timeShortfall: number
-  /** 週末疲労ペナルティ */
-  weekendFatigue: number
+  /** 土日勤務の公平さ: earlier weekend / holiday shifts this month x WEEKEND_FAIRNESS_PENALTY_PER_SHIFT. */
+  weekendFairness: number
   total: number
 }
 
@@ -70,7 +75,7 @@ export const scoreCandidate = (factors: CandidateFactors): ScoreBreakdown => {
   const rank = rankScoreOf(factors.rank) * (averageRankScore < 20 ? 3 : 1)
 
   const timeShortfall = -Math.round(factors.shortfall / 0.25) * TIME_SHORTFALL_PENALTY_PER_QUARTER_HOUR
-  const weekendFatigue = factors.previousWeekendShifts * WEEKEND_FATIGUE_PENALTY_PER_SHIFT
+  const weekendFairness = factors.previousWeekendShifts * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT
 
   return {
     attendance,
@@ -79,7 +84,7 @@ export const scoreCandidate = (factors: CandidateFactors): ScoreBreakdown => {
     streak,
     rank,
     timeShortfall,
-    weekendFatigue,
-    total: attendance + rescueBoost + overTarget + streak + rank + timeShortfall + weekendFatigue,
+    weekendFairness,
+    total: attendance + rescueBoost + overTarget + streak + rank + timeShortfall + weekendFairness,
   }
 }

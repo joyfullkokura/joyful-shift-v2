@@ -30,7 +30,7 @@ describe('generateShiftPlan decisions', () => {
     for (const decision of planFor(42).decisions.slots) {
       for (const { breakdown, score } of decision.candidates) {
         const sum = breakdown.attendance + breakdown.rescueBoost + breakdown.overTarget + breakdown.streak
-          + breakdown.rank + breakdown.timeShortfall + breakdown.weekendFatigue
+          + breakdown.rank + breakdown.timeShortfall + breakdown.weekendFairness
         expect(breakdown.total).toBe(sum)
         expect(score).toBe(breakdown.total)
       }

@@ -85,7 +85,7 @@ const findMatchingRange = (
     .sort((left, right) => left.shortfall - right.shortfall || left.priority - right.priority)[0]
 }
 
-/** Weekend / holiday shifts this staff member already has before dateStr. */
+/** Weekend / holiday shifts this staff member already has earlier this month (input to 土日勤務の公平さ). */
 const countPreviousWeekendShifts = (shifts: Record<string, string>, dateStr: string, holidays: Readonly<Record<string, string>>) =>
   Object.entries(shifts).filter(([assignedDate, assignedShift]) =>
     assignedDate < dateStr
