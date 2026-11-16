@@ -10,6 +10,7 @@ import {
   type CandidateFactors,
 } from '../scoring'
 import { actualHoursForShifts, calculateActualHours, shiftHoursFromLabel } from '../time'
+import type { ShiftRequest } from '../types'
 import { dateKey, hallInput, staffMember, workedDates } from './fixtures/builders'
 
 const factors = (overrides: Partial<CandidateFactors>): CandidateFactors => ({
@@ -172,5 +173,46 @@ describe('土日勤務の公平さ', () => {
     expect(fairnessOn(7)).toBe(2 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT) // Sat after 1st and 4th
     expect(fairnessOn(8)).toBe(3 * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT)
     expect(fairnessOn(9)).toBeCloseTo(0, 10) // Monday
+  })
+})
+
+describe('画面で選んだ日ごとの希望 (request_kind)', () => {
+  const day = (d: number) => dateKey(2026, 3, d)
+  const request = (d: number, fields: Partial<ShiftRequest>): ShiftRequest => ({ id: `r-${d}`, staff_id: 'solo', date: day(d), is_off: false, ...fields })
+
+  it('終日OK works outside the usual conditions; the usual conditions apply elsewhere', () => {
+    const evening = staffMember({ id: 'solo', work_start_1: '18:00', work_end_1: '24:00' })
+    const plan = generateShiftPlan(hallInput({ staff: [evening], requests: [request(2, { request_kind: 'any' })] }))
+    expect(workedDates(plan.schedule.staff[0].shifts)).toEqual([day(2)])
+  })
+
+  it('a time request replaces the usual conditions for that day', () => {
+    const plan = generateShiftPlan(hallInput({
+      staff: [staffMember({ id: 'solo' })],
+      requests: [
+        request(2, { request_kind: 'from', start_time: '17:00:00' }), // slot 10-14 not covered
+        request(3, { request_kind: 'until', end_time: '15:00' }),
+        request(4, { request_kind: 'range', start_time: '10:00', end_time: '14:00' }),
+      ],
+    }))
+    const worked = workedDates(plan.schedule.staff[0].shifts)
+    expect(worked).not.toContain(day(2))
+    expect(worked).toContain(day(3))
+    expect(worked).toContain(day(4))
+  })
+
+  it('reads 休み from request_kind and ignores the memo of 希望なし', () => {
+    const plan = generateShiftPlan(hallInput({
+      staff: [staffMember({ id: 'solo' })],
+      requests: [
+        request(2, { request_kind: 'off' }),
+        request(3, { request_kind: 'none', memo: '休み' }),
+        request(5, { request_kind: null, memo: '用事があります', parsed_request: null }), // legacy, unconfirmed: usual conditions
+      ],
+    }))
+    const worked = workedDates(plan.schedule.staff[0].shifts)
+    expect(worked).not.toContain(day(2))
+    expect(worked).toContain(day(3))
+    expect(worked).toContain(day(5))
   })
 })

@@ -89,7 +89,7 @@ export const canWorkSlot = (
 
 /** The day's requested range, else the staff's usual ranges, else store hours. */
 export const availableRangesFor = (context: GenerationContext, staff: StaffRecord, request: ShiftRequest | undefined): TimeRange[] => {
-  const requestedRange = getRequestedRange(request)
+  const requestedRange = getRequestedRange(request, context.storeRange)
   const workRanges = [
     toTimeRange(staff.work_start_1, staff.work_end_1),
     toTimeRange(staff.work_start_2, staff.work_end_2),

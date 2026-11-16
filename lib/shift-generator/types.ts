@@ -67,6 +67,8 @@ export type ShiftRequest = {
   staff_id?: string | null
   date?: string | null
   is_off?: boolean | null
+  /** off / any / from / until / range / none; null or missing = legacy row (see requests.ts). */
+  request_kind?: string | null
   start_time?: string | null
   end_time?: string | null
   memo?: string | null

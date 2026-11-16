@@ -63,7 +63,7 @@ const findMatchingRange = (
   slotStart: number,
   slotEnd: number,
 ): MatchingRange | undefined => {
-  const requestedRange = getRequestedRange(request)
+  const requestedRange = getRequestedRange(request, context.storeRange)
   const workRange1 = toTimeRange(staff.work_start_1, staff.work_end_1)
   const workRange2 = toTimeRange(staff.work_start_2, staff.work_end_2)
   const hasStaffTimeRange = Boolean(requestedRange || workRange1 || workRange2)
