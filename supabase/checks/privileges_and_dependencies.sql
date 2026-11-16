@@ -107,3 +107,29 @@ select r as role,
        has_column_privilege(r, 'public.shift_requests', 'parse_error', 'UPDATE')
          and has_column_privilege(r, 'public.shift_requests', 'parsed_at', 'UPDATE') as can_update
   from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+-- 8) Migration D (structured day requests).
+--    BEFORE: shows whether start_time / end_time already exist and with which type
+--    (zero rows is fine; the migration adds them as time).
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public' and table_name = 'shift_requests'
+   and column_name in ('start_time', 'end_time', 'request_kind');
+
+--    AFTER: the columns and the check constraint exist, the service role can
+--    use the new column (expected: service_role true / true, others false / false),
+--    and the breakdown shows how many legacy rows (request_kind null) remain.
+select conname from pg_constraint
+ where conrelid = 'public.shift_requests'::regclass and conname = 'shift_requests_request_kind_check';
+
+select r as role,
+       has_column_privilege(r, 'public.shift_requests', 'request_kind', 'SELECT') as can_select,
+       has_column_privilege(r, 'public.shift_requests', 'request_kind', 'UPDATE') as can_update
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+select coalesce(request_kind, '(legacy)') as request_kind,
+       count(*) as rows,
+       count(*) filter (where coalesce(trim(memo), '') <> '') as with_memo
+  from public.shift_requests
+ group by 1
+ order by 1;
