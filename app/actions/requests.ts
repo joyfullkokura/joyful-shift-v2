@@ -30,13 +30,6 @@ export type StoreDayRequestView = DayRequestView & { staff_id: string }
 
 export type RequestStaff = { id: string; name: string; is_employee: boolean }
 
-export type RequestsMonthData = {
-  staff: RequestStaff[]
-  /** Every staff member's requests in the month (store overview table). */
-  requests: StoreDayRequestView[]
-  hours: BusinessHours
-}
-
 const getBusinessHours = getStoreBusinessHours
 
 const toView = (row: Record<string, unknown>, hours: BusinessHours): DayRequestView => ({
@@ -46,10 +39,25 @@ const toView = (row: Record<string, unknown>, hours: BusinessHours): DayRequestV
   request: row.request_kind != null ? dayRequestOfRow(row) : convertLegacyRequest(row, hours),
 })
 
-/** 休み希望 screen: store-wide overview for the month. Any logged-in staff of the store. */
-export async function getRequestsMonth(storeId: string, monthStart: string): Promise<ActionResult<RequestsMonthData>> {
-  return runAction('getRequestsMonth', async () => {
-    await requireSession(storeId)
+/** Everything the 休み希望 screen shows for one month, in one call. */
+export type RequestsPageData = {
+  month: string
+  staff: RequestStaff[]
+  /** Every staff member's requests in the month (store overview table; every staff member of the store may see it). */
+  requests: StoreDayRequestView[]
+  /** The logged-in staff member's own requests (calendar editor). */
+  mine: DayRequestView[]
+  hours: BusinessHours
+}
+
+/**
+ * 休み希望 screen data for one month: the store-wide table and the logged-in
+ * staff member's own days come from the same query. Called by the server page
+ * for the first render and by the screen when the month changes.
+ */
+export async function getRequestsPageMonth(storeId: string, monthStart: string): Promise<ActionResult<RequestsPageData>> {
+  return runAction('getRequestsPageMonth', async () => {
+    const session = await requireSession(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
     const [staffResult, requestResult, hours] = await Promise.all([
@@ -60,13 +68,17 @@ export async function getRequestsMonth(storeId: string, monthStart: string): Pro
     ])
     check(staffResult.error)
     check(requestResult.error)
+    const requests = toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) }))
     return {
+      month: monthStart,
       staff: toRows(staffResult.data).map(row => ({
         id: String(row.id),
         name: typeof row.name === 'string' ? row.name : '',
         is_employee: row.is_employee === true,
       })),
-      requests: toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) })),
+      requests,
+      mine: requests.filter(request => request.staff_id === session.id)
+        .map(request => ({ date: request.date, memo: request.memo, request: request.request })),
       hours,
     }
   })
@@ -133,20 +145,5 @@ export async function saveMyMonthRequests(storeId: string, monthStart: string, e
       check(error)
     }
     return null
-  })
-}
-
-/** The logged-in staff member's own requests for one month (calendar editor). */
-export async function getMyMonthRequests(storeId: string, monthStart: string): Promise<ActionResult<DayRequestView[]>> {
-  return runAction('getMyMonthRequests', async () => {
-    const session = await requireSession(storeId)
-    assert(isMonthStart(monthStart))
-    const [{ data, error }, hours] = await Promise.all([
-      getAdminClient().from('shift_requests').select(REQUEST_COLUMNS)
-        .eq('store_id', storeId).eq('staff_id', session.id).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
-      getBusinessHours(storeId),
-    ])
-    check(error)
-    return toRows(data).map(row => toView(row, hours))
   })
 }

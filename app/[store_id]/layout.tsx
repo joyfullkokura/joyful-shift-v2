@@ -8,6 +8,9 @@ import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { getSessionStaff, getStoreName, listLoginMembers } from '@/lib/server/dal'
 import { getUnreadNotificationCount } from '@/app/actions/dashboard'
 
+// Session, staff list and the unread dot differ per person: rendered for every request, never cached.
+export const dynamic = 'force-dynamic'
+
 export default async function StoreLayout({ children, params }: { children: ReactNode; params: Promise<{ store_id: string }> }) {
   const { store_id: storeId } = await params
 
