@@ -216,3 +216,39 @@ describe('画面で選んだ日ごとの希望 (request_kind)', () => {
     expect(worked).toContain(day(5))
   })
 })
+
+describe('曜日ごとの勤務条件 (weekly_availability)', () => {
+  // March 2026: the 2nd is a Monday.
+  const day = (d: number) => dateKey(2026, 3, d)
+  const everyDay = (value: object) => Object.fromEntries(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map(key => [key, value]))
+  const weekly = { ...everyDay({ kind: 'range', start: '10:00', end: '14:00' }), wednesday: { kind: 'off', start: null, end: null }, friday: { kind: 'from', start: '17:00', end: null } }
+
+  it('works only on weekdays that are available, within the chosen times, ignoring the old time bands', () => {
+    const plan = generateShiftPlan(hallInput({ staff: [staffMember({ id: 'solo', weekly_availability: weekly })] }))
+    const worked = workedDates(plan.schedule.staff[0].shifts)
+    expect(worked).toContain(day(2)) // Monday 10-14
+    expect(worked).not.toContain(day(4)) // Wednesday: 出られない
+    expect(worked).not.toContain(day(6)) // Friday 17:00〜: slot 10-14 not covered
+    expect(plan.schedule.staff[0].shifts[day(4)]).toBe('×')
+  })
+
+  it('a day request still wins over the weekday choice', () => {
+    const plan = generateShiftPlan(hallInput({
+      staff: [staffMember({ id: 'solo', weekly_availability: weekly })],
+      requests: [
+        { id: 'a', staff_id: 'solo', date: day(4), request_kind: 'any' }, // Wednesday made available
+        { id: 'b', staff_id: 'solo', date: day(2), request_kind: 'off', is_off: true },
+        { id: 'c', staff_id: 'solo', date: day(9), request_kind: 'none', memo: 'メモだけ' }, // Monday: weekday choice applies
+      ],
+    }))
+    const worked = workedDates(plan.schedule.staff[0].shifts)
+    expect(worked).toContain(day(4))
+    expect(worked).not.toContain(day(2))
+    expect(worked).toContain(day(9))
+  })
+
+  it('ignores an invalid value and keeps the old time bands', () => {
+    const plan = generateShiftPlan(hallInput({ staff: [staffMember({ id: 'solo', weekly_availability: { monday: 'x' } })] }))
+    expect(workedDates(plan.schedule.staff[0].shifts)).toContain(day(4))
+  })
+})

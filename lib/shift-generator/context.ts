@@ -1,5 +1,5 @@
 import { jobForGroup } from './jobs'
-import { getRequestedRange, isRequestUnavailable } from './requests'
+import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import type { GeneratedStaffShift, GeneratorInput, JobRole, ShiftRequest, StaffRecord, TimeRange } from './types'
 import { toTimeRange } from './time'
 
@@ -80,16 +80,19 @@ export const canWorkSlot = (
   slot: { group: string; start: number; end: number },
 ) => {
   const request = requestFor(context, staff.id, dateStr)
-  if (isRequestUnavailable(request)) return false
+  if (isUnavailableOn(staff, request, dateStr, context.storeRange)) return false
   if (!matchesGroup(staff, slot.group)) return false
 
-  const availableRanges = availableRangesFor(context, staff, request)
+  const availableRanges = availableRangesFor(context, staff, request, dateStr)
   return availableRanges.some(range => range.start <= slot.start && range.end >= slot.end)
 }
 
-/** The day's requested range, else the staff's usual ranges, else store hours. */
-export const availableRangesFor = (context: GenerationContext, staff: StaffRecord, request: ShiftRequest | undefined): TimeRange[] => {
+/** The day's requested range, else the weekday choice, else the staff's usual ranges, else store hours. */
+export const availableRangesFor = (context: GenerationContext, staff: StaffRecord, request: ShiftRequest | undefined, dateStr: string): TimeRange[] => {
   const requestedRange = getRequestedRange(request, context.storeRange)
+  if (requestedRange) return [requestedRange]
+  const weeklyRange = weeklyRangeFor(staff, dateStr, context.storeRange)
+  if (weeklyRange !== undefined) return weeklyRange ? [weeklyRange] : []
   const workRanges = [
     toTimeRange(staff.work_start_1, staff.work_end_1),
     toTimeRange(staff.work_start_2, staff.work_end_2),

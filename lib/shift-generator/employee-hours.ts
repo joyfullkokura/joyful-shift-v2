@@ -8,7 +8,7 @@ import {
   type DayAssignments,
   type GenerationContext,
 } from './context'
-import { isRequestUnavailable } from './requests'
+import { isUnavailableOn } from './requests'
 import { actualHoursForShifts, calculateActualHours, fToT } from './time'
 import type { GeneratedStaffShift, StaffRecord } from './types'
 
@@ -145,8 +145,8 @@ const extendShift = (
     const slot = dayData.slots.find(item => item.staffId === employee.id)
     if (!slot) continue
     const request = requestFor(context, employee.id, dateStr)
-    if (isRequestUnavailable(request)) continue
-    const availableRanges = availableRangesFor(context, employee, request)
+    if (isUnavailableOn(employee, request, dateStr, context.storeRange)) continue
+    const availableRanges = availableRangesFor(context, employee, request, dateStr)
     const extensionRanges = availableRanges.filter(range => range.start <= slot.start && range.end >= shift.end)
     if (extensionRanges.length === 0) continue
     const availableEnd = Math.min(

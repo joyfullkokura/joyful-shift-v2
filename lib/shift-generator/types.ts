@@ -60,6 +60,8 @@ export type StaffRecord = {
   work_end_1?: string | null
   work_start_2?: string | null
   work_end_2?: string | null
+  /** Weekday choices (see lib/weekly-availability.ts); null = not set, the time bands above apply. */
+  weekly_availability?: unknown
 }
 
 export type ShiftRequest = {

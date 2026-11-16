@@ -10,7 +10,7 @@ import {
   type GenerationContext,
 } from './context'
 import { jobForGroup } from './jobs'
-import { getRequestedRange, isRequestUnavailable } from './requests'
+import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import { scoreCandidate, type ScoreBreakdown } from './scoring'
 import { calculateActualHours, fToT, shiftHoursFromLabel, toTimeRange } from './time'
 import type { ShiftRequest, StaffRecord, TimeRange } from './types'
@@ -60,16 +60,20 @@ const findMatchingRange = (
   context: GenerationContext,
   staff: StaffRecord,
   request: ShiftRequest | undefined,
+  dateStr: string,
   slotStart: number,
   slotEnd: number,
 ): MatchingRange | undefined => {
   const requestedRange = getRequestedRange(request, context.storeRange)
+  const weeklyRange = requestedRange ? undefined : weeklyRangeFor(staff, dateStr, context.storeRange)
   const workRange1 = toTimeRange(staff.work_start_1, staff.work_end_1)
   const workRange2 = toTimeRange(staff.work_start_2, staff.work_end_2)
   const hasStaffTimeRange = Boolean(requestedRange || workRange1 || workRange2)
   const availableRanges: { range: TimeRange; priority: number }[] = requestedRange
     ? [{ range: requestedRange, priority: 0 }]
-    : [
+    : weeklyRange !== undefined
+      ? (weeklyRange ? [{ range: weeklyRange, priority: 0 }] : [])
+      : [
         ...(workRange1 ? [{ range: workRange1, priority: 0 }] : []),
         ...(workRange2 ? [{ range: workRange2, priority: 1 }] : []),
         ...(!hasStaffTimeRange && context.storeRange ? [{ range: context.storeRange, priority: 2 }] : []),
@@ -113,7 +117,7 @@ export const assignInitialSlots = (context: GenerationContext) => {
     const dailyAssignments = new Set<string>()
 
     staffList.forEach((staff, index) => {
-      if (isRequestUnavailable(requestFor(context, staff.id, dateStr))) {
+      if (isUnavailableOn(staff, requestFor(context, staff.id, dateStr), dateStr, context.storeRange)) {
         scheduleStaff[index].shifts[dateStr] = '×'
       }
     })
@@ -138,11 +142,11 @@ export const assignInitialSlots = (context: GenerationContext) => {
         const candidates: SlotCandidate[] = []
         staffList.forEach((staff, index) => {
           const request = requestFor(context, staff.id, dateStr)
-          if (isRequestUnavailable(request) || dailyAssignments.has(staff.id)) return
+          if (isUnavailableOn(staff, request, dateStr, context.storeRange) || dailyAssignments.has(staff.id)) return
           if (staff.is_employee && scheduleStaff[index].assignedDays >= EMPLOYEE_MAX_DAYS) return
           if (!matchesGroup(staff, group)) return
 
-          const matchingRange = findMatchingRange(context, staff, request, slot.start, slotEnd)
+          const matchingRange = findMatchingRange(context, staff, request, dateStr, slot.start, slotEnd)
           if (!matchingRange) return
 
           const breakdown = scoreCandidate({
