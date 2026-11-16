@@ -1063,7 +1063,7 @@ export default function GeneratePage() {
         )}
       </div>
 
-      <div className="fixed bottom-28 left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white/95 p-4 pb-3 shadow-sm md:bottom-0 md:left-[268px] md:justify-center md:pb-4">
+      <div className="fixed bottom-[var(--mobile-nav-height,0px)] left-0 right-0 z-50 flex gap-3 border-t border-[var(--border)] bg-white p-4 pb-3 shadow-sm md:bottom-0 md:left-[268px] md:justify-center md:pb-4">
         <button onClick={handleSave} disabled={isSaving} className="flex-1 rounded-md bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition-colors hover:bg-slate-200 md:max-w-[150px]">
           <span className="inline-flex items-center gap-2"><Save size={16} /> {isSaving ? '...' : '保存'}</span>
         </button>

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useState, useEffect, ReactNode } from 'react'
+import { useState, useEffect, useRef, ReactNode } from 'react'
 import { ArrowRight, CalendarDays, Eye, House, LogOut, Sparkles, Store, Users, ClipboardList, UserPlus, X } from 'lucide-react'
 import { useAdmin } from '@/context/AdminContext'
 import PinLoginModal from '@/components/PinLoginModal'
@@ -27,6 +27,7 @@ export default function StoreShell({ children, storeId, storeName, members, hour
   const router = useRouter()
   const { currentStaff, isHydrated, isEmployee, login, logout } = useAdmin()
   const [selectedStaff, setSelectedStaff] = useState<LoginMember | null>(null)
+  const mobileNavRef = useRef<HTMLElement>(null)
   const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false)
   const [isRegistrationModalOpen, setIsRegistrationModalOpen] = useState(false)
   const [newStaffName, setNewStaffName] = useState('')
@@ -127,6 +128,22 @@ export default function StoreShell({ children, storeId, storeName, members, hour
     setRegistrationMessage('')
     setIsRegistrationModalOpen(true)
   }
+
+  // Fixed action bars and the page's bottom padding follow the real height of the
+  // mobile navigation (one or two rows, safe-area inset). 0 on desktop, where it is hidden.
+  useEffect(() => {
+    const nav = mobileNavRef.current
+    const root = document.documentElement
+    if (!nav) return
+    const update = () => root.style.setProperty('--mobile-nav-height', `${nav.offsetHeight}px`)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(nav)
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--mobile-nav-height')
+    }
+  }, [currentStaff])
 
   if (!isHydrated) {
     return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">読み込み中...</div>
@@ -244,7 +261,7 @@ export default function StoreShell({ children, storeId, storeName, members, hour
         </div>
       </aside>
 
-      <main className="min-w-0 w-full flex-1 overflow-x-hidden pb-24 md:ml-[268px] md:pb-10">
+      <main className="min-w-0 w-full flex-1 overflow-x-hidden pb-[calc(var(--mobile-nav-height,6rem)+1rem)] md:ml-[268px] md:pb-10">
         <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 md:hidden">
           <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-900">{currentStaff.name}</p><p className="text-[10px] text-slate-500">{isEmployee ? '社員' : 'アルバイト'}</p></div>
           <button type="button" onClick={() => void logout()} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600"><LogOut size={13} />名前変更</button>
@@ -252,7 +269,7 @@ export default function StoreShell({ children, storeId, storeName, members, hour
         {children}
       </main>
 
-      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 p-2 pb-6 shadow-sm md:hidden">
+      <nav ref={mobileNavRef} className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white p-2 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-sm md:hidden">
         <div className="mx-auto grid max-w-md grid-cols-3 gap-y-2">
           {navItems.map(item => {
             const Icon = item.icon
