@@ -12,73 +12,6 @@ import { assert, isId, isJsonWithin, isMonthStart, isRecord, isShortText, nextMo
 const MAX_SCHEDULE_BYTES = 900_000
 const MAX_SETTINGS_BYTES = 200_000
 
-export type GenerateContext = {
-  store: DataRow | null
-  draft: DataRow | null
-  settings: DataRow[]
-  /** Latest weekday / weekend settings from earlier months, used when this month has none. */
-  pastSettings: DataRow[]
-}
-
-export async function getGenerateContext(storeId: string, monthStart: string): Promise<ActionResult<GenerateContext>> {
-  return runAction('getGenerateContext', async () => {
-    await requireAdmin(storeId)
-    assert(isMonthStart(monthStart))
-    const db = getAdminClient()
-    const [storeResult, draftResult, settingsResult, pastResult] = await Promise.all([
-      db.from('stores').select('*').eq('store_id', storeId).maybeSingle(),
-      db.from('monthly_shifts').select('*').eq('store_id', storeId).eq('target_month', monthStart).maybeSingle(),
-      db.from('generation_settings').select('*').eq('store_id', storeId).eq('target_month', monthStart),
-      db.from('generation_settings').select('*').eq('store_id', storeId)
-        .in('config_type', ['wd', 'we']).order('target_month', { ascending: false }).limit(10),
-    ])
-    check(storeResult.error)
-    check(draftResult.error)
-    check(settingsResult.error)
-    check(pastResult.error)
-    const store = toRow(storeResult.data)
-    return {
-      store: store ? omit(store, STORE_SECRET_COLUMNS) : null,
-      draft: toRow(draftResult.data),
-      settings: toRows(settingsResult.data),
-      pastSettings: toRows(pastResult.data),
-    }
-  })
-}
-
-export type GenerationSettingInput = { config_type: string; counts: unknown; slots: unknown }
-
-/** Saves this month's settings and removes special-day settings that were deselected. */
-export async function saveGenerationSettings(storeId: string, monthStart: string, entries: GenerationSettingInput[]): Promise<ActionResult<null>> {
-  return runAction('saveGenerationSettings', async () => {
-    await requireAdmin(storeId)
-    assert(isMonthStart(monthStart) && Array.isArray(entries) && entries.length <= 40)
-    assert(isJsonWithin(entries, MAX_SETTINGS_BYTES))
-    const payload = entries.map(entry => {
-      assert(isRecord(entry) && isShortText(entry.config_type, 40) && entry.config_type.length > 0)
-      assert(isRecord(entry.counts) && isRecord(entry.slots))
-      return { store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: entry.slots }
-    })
-    const keep = new Set(payload.map(row => row.config_type))
-    const db = getAdminClient()
-
-    const { data: existing, error: fetchError } = await db.from('generation_settings').select('config_type')
-      .eq('store_id', storeId).eq('target_month', monthStart)
-    check(fetchError)
-    const removeTypes = toRows(existing)
-      .map(row => String(row.config_type))
-      .filter(type => type !== 'wd' && type !== 'we' && !keep.has(type))
-    if (removeTypes.length > 0) {
-      const { error } = await db.from('generation_settings').delete()
-        .eq('store_id', storeId).eq('target_month', monthStart).in('config_type', removeTypes)
-      check(error)
-    }
-    const { error } = await db.from('generation_settings').upsert(payload, { onConflict: 'store_id, target_month, config_type' })
-    check(error)
-    return null
-  })
-}
-
 /** An old memo-only request the rules could not read: the manager decides on the generate screen. */
 export type RequestReview = { id: string; staff_id: string; staff_name: string; date: string; memo: string }
 
@@ -136,6 +69,79 @@ const toReviews = (pending: DataRow[], staff: DataRow[]): RequestReview[] => {
     .sort((left, right) => left.date.localeCompare(right.date) || left.staff_name.localeCompare(right.staff_name, 'ja'))
 }
 
+export type GenerateContext = {
+  store: DataRow | null
+  draft: DataRow | null
+  settings: DataRow[]
+  /** Latest weekday / weekend settings from earlier months, used when this month has none. */
+  pastSettings: DataRow[]
+  /** 要確認の要望 of the month (old memos the rules could not read). */
+  reviews: RequestReview[]
+}
+
+export async function getGenerateContext(storeId: string, monthStart: string): Promise<ActionResult<GenerateContext>> {
+  return runAction('getGenerateContext', async () => {
+    await requireAdmin(storeId)
+    assert(isMonthStart(monthStart))
+    const db = getAdminClient()
+    const [storeResult, draftResult, settingsResult, pastResult, staffResult, { pending }] = await Promise.all([
+      db.from('stores').select('*').eq('store_id', storeId).maybeSingle(),
+      db.from('monthly_shifts').select('*').eq('store_id', storeId).eq('target_month', monthStart).maybeSingle(),
+      db.from('generation_settings').select('*').eq('store_id', storeId).eq('target_month', monthStart),
+      db.from('generation_settings').select('*').eq('store_id', storeId)
+        .in('config_type', ['wd', 'we']).order('target_month', { ascending: false }).limit(10),
+      db.from('staff').select('id, name').eq('store_id', storeId),
+      loadMonthRequests(storeId, monthStart),
+    ])
+    check(staffResult.error)
+    check(storeResult.error)
+    check(draftResult.error)
+    check(settingsResult.error)
+    check(pastResult.error)
+    const store = toRow(storeResult.data)
+    return {
+      store: store ? omit(store, STORE_SECRET_COLUMNS) : null,
+      draft: toRow(draftResult.data),
+      settings: toRows(settingsResult.data),
+      pastSettings: toRows(pastResult.data),
+      reviews: toReviews(pending, toRows(staffResult.data)),
+    }
+  })
+}
+
+export type GenerationSettingInput = { config_type: string; counts: unknown; slots: unknown }
+
+/** Saves this month's settings and removes special-day settings that were deselected. */
+export async function saveGenerationSettings(storeId: string, monthStart: string, entries: GenerationSettingInput[]): Promise<ActionResult<null>> {
+  return runAction('saveGenerationSettings', async () => {
+    await requireAdmin(storeId)
+    assert(isMonthStart(monthStart) && Array.isArray(entries) && entries.length <= 40)
+    assert(isJsonWithin(entries, MAX_SETTINGS_BYTES))
+    const payload = entries.map(entry => {
+      assert(isRecord(entry) && isShortText(entry.config_type, 40) && entry.config_type.length > 0)
+      assert(isRecord(entry.counts) && isRecord(entry.slots))
+      return { store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: entry.slots }
+    })
+    const keep = new Set(payload.map(row => row.config_type))
+    const db = getAdminClient()
+
+    const { data: existing, error: fetchError } = await db.from('generation_settings').select('config_type')
+      .eq('store_id', storeId).eq('target_month', monthStart)
+    check(fetchError)
+    const removeTypes = toRows(existing)
+      .map(row => String(row.config_type))
+      .filter(type => type !== 'wd' && type !== 'we' && !keep.has(type))
+    if (removeTypes.length > 0) {
+      const { error } = await db.from('generation_settings').delete()
+        .eq('store_id', storeId).eq('target_month', monthStart).in('config_type', removeTypes)
+      check(error)
+    }
+    const { error } = await db.from('generation_settings').upsert(payload, { onConflict: 'store_id, target_month, config_type' })
+    check(error)
+    return null
+  })
+}
+
 export async function getGenerationInputs(storeId: string, monthStart: string): Promise<ActionResult<GenerationInputs>> {
   return runAction('getGenerationInputs', async () => {
     await requireAdmin(storeId)
@@ -152,21 +158,6 @@ export async function getGenerationInputs(storeId: string, monthStart: string): 
       requests,
       reviews: toReviews(pending, staff),
     }
-  })
-}
-
-/** 要確認の要望 shown above the generate button when the month is opened. */
-export async function getRequestReviews(storeId: string, monthStart: string): Promise<ActionResult<RequestReview[]>> {
-  return runAction('getRequestReviews', async () => {
-    await requireAdmin(storeId)
-    assert(isMonthStart(monthStart))
-    const db = getAdminClient()
-    const [staffResult, { pending }] = await Promise.all([
-      db.from('staff').select('id, name').eq('store_id', storeId),
-      loadMonthRequests(storeId, monthStart),
-    ])
-    check(staffResult.error)
-    return toReviews(pending, toRows(staffResult.data))
   })
 }
 

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useAdmin } from '@/context/AdminContext'
 import { getCleaningLogs, saveCleaningLogs } from '@/app/actions/cleaning'
+import { LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
 
 type AreaKey = '1' | '2' | '3' | '4' | '5' | '6' | '7'
 type Areas = Record<AreaKey, boolean>
@@ -524,7 +525,12 @@ export default function CleaningPage() {
                 </thead>
                 <tbody>
                   {isLoading ? (
-                    <tr><td colSpan={10} className="px-4 py-16 text-center text-sm text-slate-500">清掃記録を取得中です...</td></tr>
+                    <tr><td colSpan={10} className="px-4 py-6">
+                      <SkeletonRegion label="清掃記録を読み込んでいます…" className="space-y-2">
+                        <LoadingNote label="清掃記録を読み込んでいます…" />
+                        {Array.from({ length: 6 }, (_, index) => <SkeletonBlock key={index} className="h-8 w-full" />)}
+                      </SkeletonRegion>
+                    </td></tr>
                   ) : records.map(record => (
                     <tr key={record.date} className="border-b border-slate-200 last:border-b-0 hover:bg-slate-50/60">
                       <th className="border-r border-slate-200 bg-slate-50/70 px-4 py-3 align-top">

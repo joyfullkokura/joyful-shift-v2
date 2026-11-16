@@ -7,6 +7,7 @@ import { getConfirmedSchedule } from '@/app/actions/schedule'
 import { unwrap } from '@/lib/action-result'
 import { getHolidayName } from '@/lib/holidays'
 import { useAdmin } from '@/context/AdminContext'
+import { LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
 
 type ShiftStaff = {
   id: string
@@ -155,7 +156,10 @@ export default function ViewShiftPage() {
       </header>
 
       {isLoading ? (
-        <div className="rounded-lg border border-slate-200 bg-white px-5 py-8 text-center text-sm text-slate-500">確定シフトを読み込んでいます...</div>
+        <SkeletonRegion label="確定シフトを読み込んでいます…" className="space-y-2">
+          <LoadingNote label="確定シフトを読み込んでいます…" />
+          <TableSkeleton rows={8} columns={12} />
+        </SkeletonRegion>
       ) : loadError ? (
         <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-800">シフトを取得できませんでした。時間をおいて再度お試しください。</div>
       ) : !schedule ? (

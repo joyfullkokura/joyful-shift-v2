@@ -5,7 +5,6 @@ import {
   deleteMonthlyShift,
   getGenerateContext,
   getGenerationInputs,
-  getRequestReviews,
   resolveShiftRequest,
   saveGenerationSettings,
   saveMonthlyShift,
@@ -19,6 +18,7 @@ import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash
 import ShiftTimeEditor from '@/components/ShiftTimeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DayRequestSheet from '@/components/DayRequestSheet'
+import GenerateSkeleton from './GenerateSkeleton'
 import { useFlash } from '@/components/FlashMessage'
 import {
   actualHoursForShifts,
@@ -173,23 +173,6 @@ export default function GeneratePage() {
     return () => document.removeEventListener('pointerdown', closeEditorOnOutsidePointer)
   }, [closeShiftEditor])
 
-  useEffect(() => {
-    if (!store_id) return
-    const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
-    let cancelled = false
-    getRequestReviews(currentStoreId, targetMonthStr).then(result => {
-      if (cancelled) return
-      setResolvedReviews({})
-      if (result.ok) {
-        setRequestReviews(result.data)
-        setReviewError('')
-      } else {
-        setRequestReviews([])
-        setReviewError(result.error)
-      }
-    })
-    return () => { cancelled = true }
-  }, [store_id, targetMonthStr])
 
   const resolveReview = async (review: RequestReview, request: DayRequest) => {
     if (!store_id) return
@@ -212,6 +195,10 @@ export default function GeneratePage() {
     try {
     // One admin-only server call: store settings, this month's draft and generation settings.
     const context = unwrap(await getGenerateContext(currentStoreId, targetMonthStr))
+    // 要確認の要望 arrive with the context (one Server Action when the month opens).
+    setRequestReviews(context.reviews)
+    setResolvedReviews({})
+    setReviewError('')
     const sInfo = context.store ? toStoreInfo(context.store) : null
     if (sInfo) setStoreInfo(sInfo)
 
@@ -528,7 +515,7 @@ export default function GeneratePage() {
     }
   }
 
-  if (isCheckingDraft || !storeInfo) return <div className="p-10 text-slate-400">読み込み中...</div>
+  if (isCheckingDraft || !storeInfo) return <GenerateSkeleton />
 
   if (isDraftEdit && generatedSchedule) {
     const editDates = Array.from({ length: daysInMonth }, (_, index) =>
