@@ -19,16 +19,18 @@ type StoreShellProps = {
   storeName: string
   members: LoginMember[]
   hours: BusinessHours
+  /** Unread dot as rendered by the layout; refreshed only after this screen changes requests. */
+  initialHasUnread: boolean
   loadError: string
 }
 
-export default function StoreShell({ children, storeId, storeName, members, hours, loadError }: StoreShellProps) {
+export default function StoreShell({ children, storeId, storeName, members, hours, initialHasUnread, loadError }: StoreShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const { currentStaff, isHydrated, isEmployee, login, logout } = useAdmin()
   const [selectedStaff, setSelectedStaff] = useState<LoginMember | null>(null)
   const mobileNavRef = useRef<HTMLElement>(null)
-  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false)
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(initialHasUnread)
   const [isRegistrationModalOpen, setIsRegistrationModalOpen] = useState(false)
   const [newStaffName, setNewStaffName] = useState('')
   const [newStaffEmploymentType, setNewStaffEmploymentType] = useState('アルバイト・パート')
@@ -42,26 +44,23 @@ export default function StoreShell({ children, storeId, storeName, members, hour
   const [registrationMessage, setRegistrationMessage] = useState('')
   const [isSubmittingRegistration, setIsSubmittingRegistration] = useState(false)
 
+  // The first value comes from the layout (rendered on the server with the page). It is
+  // fetched again only when a screen reports a change to requests.
   useEffect(() => {
     let isCurrent = true
-    const loadUnreadNotifications = async () => {
-      if (!currentStaff?.id) {
-        if (isCurrent) setHasUnreadNotifications(false)
-        return
-      }
+    const refreshUnreadNotifications = async () => {
+      if (!currentStaff?.id) return
       // The server decides what counts (store-wide pending for admins, own results otherwise).
       const result = await getUnreadNotificationCount(storeId)
-      if (!isCurrent || !result.ok) return
-      setHasUnreadNotifications(result.data > 0)
+      if (isCurrent && result.ok) setHasUnreadNotifications(result.data > 0)
     }
-    const refreshUnreadNotifications = () => { void loadUnreadNotifications() }
-    void loadUnreadNotifications()
-    window.addEventListener('staff-request-updated', refreshUnreadNotifications)
+    const handleUpdate = () => { void refreshUnreadNotifications() }
+    window.addEventListener('staff-request-updated', handleUpdate)
     return () => {
       isCurrent = false
-      window.removeEventListener('staff-request-updated', refreshUnreadNotifications)
+      window.removeEventListener('staff-request-updated', handleUpdate)
     }
-  }, [currentStaff?.id, isEmployee, storeId])
+  }, [currentStaff?.id, storeId])
 
   const restrictedPath = /^\/[^/]+\/(staff|generate|cleaning)(\/|$)/.test(pathname)
   useEffect(() => {

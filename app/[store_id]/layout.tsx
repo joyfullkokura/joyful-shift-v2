@@ -6,6 +6,7 @@ import type { LoginMember, SessionStaff } from '@/lib/auth-types'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { getSessionStaff, getStoreName, listLoginMembers } from '@/lib/server/dal'
+import { getUnreadNotificationCount } from '@/app/actions/dashboard'
 
 export default async function StoreLayout({ children, params }: { children: ReactNode; params: Promise<{ store_id: string }> }) {
   const { store_id: storeId } = await params
@@ -14,6 +15,7 @@ export default async function StoreLayout({ children, params }: { children: Reac
   let storeName = ''
   let members: LoginMember[] = []
   let hours: BusinessHours = DEFAULT_BUSINESS_HOURS
+  let hasUnreadNotifications = false
   let loadError = ''
   try {
     const [resolvedSession, resolvedStoreName] = await Promise.all([getSessionStaff(storeId), getStoreName(storeId)])
@@ -22,6 +24,12 @@ export default async function StoreLayout({ children, params }: { children: Reac
     // The name picker is only needed (and only sent) before login.
     // Business hours bound the time buttons of first-time setup / registration.
     if (!session) [members, hours] = await Promise.all([listLoginMembers(storeId), getStoreBusinessHours(storeId)])
+    // Rendered with the page, so screens no longer queue a separate Server Action for the dot.
+    // The action re-checks the session; the result depends on the person, and nothing is cached.
+    else {
+      const unread = await getUnreadNotificationCount(storeId)
+      hasUnreadNotifications = unread.ok && unread.data > 0
+    }
   } catch (error) {
     console.error('店舗情報の読み込みに失敗しました。', error)
     loadError = 'スタッフ一覧を読み込めませんでした。時間をおいて再度お試しください。'
@@ -31,7 +39,7 @@ export default async function StoreLayout({ children, params }: { children: Reac
     // Remount when the server-side session changes (login, logout, PIN change).
     <AdminProvider key={session?.id ?? 'guest'} storeId={storeId} initialStaff={session}>
       <FlashProvider storeId={storeId}>
-        <StoreShell storeId={storeId} storeName={storeName} members={members} hours={hours} loadError={loadError}>
+        <StoreShell storeId={storeId} storeName={storeName} members={members} hours={hours} initialHasUnread={hasUnreadNotifications} loadError={loadError}>
           {children}
         </StoreShell>
       </FlashProvider>
