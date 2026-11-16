@@ -54,3 +54,6 @@ export const isJsonWithin = (value: unknown, maxBytes: number): boolean => {
     return false
   }
 }
+
+/** Today's date (YYYY-MM-DD) in Japan time. */
+export const todayInJapan = (): string => new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
