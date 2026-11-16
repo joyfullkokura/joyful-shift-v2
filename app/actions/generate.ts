@@ -1,7 +1,7 @@
 'use server'
 
 import type { ActionResult, DataRow } from '@/lib/action-result'
-import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
+import { type DayRequest, type DayRequestKind, businessHoursOf, convertLegacyRequest, toDayRequest } from '@/lib/day-request'
 import { STAFF_SECRET_COLUMNS, STORE_SECRET_COLUMNS, check, omit, runAction, toRow, toRows } from '@/lib/server/action'
 import { requireAdmin } from '@/lib/server/dal'
 import { getAdminClient } from '@/lib/server/supabase-admin'
@@ -79,37 +79,117 @@ export async function saveGenerationSettings(storeId: string, monthStart: string
   })
 }
 
-export type GenerationInputs = { staff: DataRow[]; requests: DataRow[] }
+/** An old memo-only request the rules could not read: the manager decides on the generate screen. */
+export type RequestReview = { id: string; staff_id: string; staff_name: string; date: string; memo: string }
+
+export type GenerationInputs = { staff: DataRow[]; requests: DataRow[]; reviews: RequestReview[] }
+
+const CONVERSION_CONCURRENCY = 5
+
+/**
+ * Reads the month's requests and converts rows saved before requests were
+ * structured (rules on the memo, see convertLegacyRequest). Converted rows are
+ * written back once; rows nobody can read stay null and are listed for review.
+ */
+const loadMonthRequests = async (storeId: string, monthStart: string): Promise<{ requests: DataRow[]; pending: DataRow[] }> => {
+  const db = getAdminClient()
+  const [requestResult, storeResult] = await Promise.all([
+    db.from('shift_requests').select('*').eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
+    db.from('stores').select('open_time, close_time').eq('store_id', storeId).maybeSingle(),
+  ])
+  check(requestResult.error)
+  check(storeResult.error)
+  const store = toRow(storeResult.data)
+  const hours = businessHoursOf(store?.open_time, store?.close_time)
+  const requests = toRows(requestResult.data)
+
+  const conversions = requests
+    .filter(row => row.request_kind == null)
+    .map(row => ({ row, request: convertLegacyRequest(row, hours) }))
+  const converted = conversions.filter((item): item is { row: DataRow; request: DayRequest } => item.request !== null)
+  for (let index = 0; index < converted.length; index += CONVERSION_CONCURRENCY) {
+    await Promise.all(converted.slice(index, index + CONVERSION_CONCURRENCY).map(async ({ row, request }) => {
+      const fields = { request_kind: request.kind, start_time: request.start, end_time: request.end, is_off: request.kind === 'off' }
+      // Only rows still unconverted: a staff member may have saved the day meanwhile.
+      const { error } = await db.from('shift_requests').update(fields)
+        .eq('id', row.id).eq('store_id', storeId).is('request_kind', null)
+      check(error)
+      Object.assign(row, fields)
+    }))
+  }
+  if (converted.length > 0) {
+    console.info(JSON.stringify({ event: 'legacy_requests_converted', count: converted.length, pending: conversions.length - converted.length }))
+  }
+  return { requests, pending: conversions.filter(item => item.request === null).map(item => item.row) }
+}
+
+const toReviews = (pending: DataRow[], staff: DataRow[]): RequestReview[] => {
+  const names = new Map(staff.map(row => [String(row.id), typeof row.name === 'string' ? row.name : '']))
+  return pending
+    .map(row => ({
+      id: String(row.id),
+      staff_id: String(row.staff_id),
+      staff_name: names.get(String(row.staff_id)) || 'スタッフ',
+      date: String(row.date),
+      memo: typeof row.memo === 'string' ? row.memo : '',
+    }))
+    .sort((left, right) => left.date.localeCompare(right.date) || left.staff_name.localeCompare(right.staff_name, 'ja'))
+}
 
 export async function getGenerationInputs(storeId: string, monthStart: string): Promise<ActionResult<GenerationInputs>> {
   return runAction('getGenerationInputs', async () => {
     await requireAdmin(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
-    const [staffResult, requestResult] = await Promise.all([
+    const [staffResult, { requests, pending }] = await Promise.all([
       db.from('staff').select('*').eq('store_id', storeId).order('name', { ascending: true }),
-      db.from('shift_requests').select('*').eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
+      loadMonthRequests(storeId, monthStart),
     ])
     check(staffResult.error)
-    check(requestResult.error)
+    const staff = toRows(staffResult.data)
     return {
-      staff: toRows(staffResult.data).map(row => omit(row, STAFF_SECRET_COLUMNS)),
-      requests: toRows(requestResult.data),
+      staff: staff.map(row => omit(row, STAFF_SECRET_COLUMNS)),
+      requests,
+      reviews: toReviews(pending, staff),
     }
   })
 }
 
-/** Caches the AI interpretation of one day's request memo. */
-export async function saveParsedShiftRequest(storeId: string, requestId: string, parsed: unknown): Promise<ActionResult<null>> {
-  return runAction('saveParsedShiftRequest', async () => {
+/** 要確認の要望 shown above the generate button when the month is opened. */
+export async function getRequestReviews(storeId: string, monthStart: string): Promise<ActionResult<RequestReview[]>> {
+  return runAction('getRequestReviews', async () => {
+    await requireAdmin(storeId)
+    assert(isMonthStart(monthStart))
+    const db = getAdminClient()
+    const [staffResult, { pending }] = await Promise.all([
+      db.from('staff').select('id, name').eq('store_id', storeId),
+      loadMonthRequests(storeId, monthStart),
+    ])
+    check(staffResult.error)
+    return toReviews(pending, toRows(staffResult.data))
+  })
+}
+
+/** The manager decides what an unreadable old memo means. The memo itself is kept. */
+export async function resolveShiftRequest(
+  storeId: string,
+  requestId: string,
+  kind: DayRequestKind,
+  start: string | null,
+  end: string | null,
+): Promise<ActionResult<DayRequest>> {
+  return runAction('resolveShiftRequest', async () => {
     await requireAdmin(storeId)
     assert(isId(requestId))
-    const parsedRequest = parseParsedShiftRequest(parsed)
-    assert(parsedRequest)
-    const { error } = await getAdminClient().from('shift_requests').update({ parsed_request: parsedRequest })
+    const request = toDayRequest(kind, start, end)
+    assert(request, '時間を選び直してください。')
+    const { data, error } = await getAdminClient().from('shift_requests')
+      .update({ request_kind: request.kind, start_time: request.start, end_time: request.end, is_off: request.kind === 'off' })
       .eq('id', requestId).eq('store_id', storeId)
+      .select('id')
     check(error)
-    return null
+    assert(toRows(data).length === 1, 'この要望は見つかりませんでした。画面を開き直してください。')
+    return request
   })
 }
 

@@ -5,17 +5,20 @@ import {
   deleteMonthlyShift,
   getGenerateContext,
   getGenerationInputs,
+  getRequestReviews,
+  resolveShiftRequest,
   saveGenerationSettings,
   saveMonthlyShift,
-  saveParsedShiftRequest,
+  type RequestReview,
 } from '@/app/actions/generate'
 import { unwrap, type DataRow } from '@/lib/action-result'
 import { getHolidayName, holidaysOfYear, isHoliday } from '@/lib/holidays'
-import { parseParsedShiftRequest } from '@/lib/parsed-conditions'
+import { type DayRequest, businessHoursOf, formatDayRequest } from '@/lib/day-request'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowRight, Calendar as CalendarIcon, CheckCircle2, Save, Rocket, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 import ShiftTimeEditor from '@/components/ShiftTimeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import DayRequestSheet from '@/components/DayRequestSheet'
 import { useFlash } from '@/components/FlashMessage'
 import {
   actualHoursForShifts,
@@ -147,6 +150,10 @@ export default function GeneratePage() {
   const [draftNotice, setDraftNotice] = useState('')
   const [draftError, setDraftError] = useState('')
   const [requestAnalysisWarning, setRequestAnalysisWarning] = useState('')
+  const [requestReviews, setRequestReviews] = useState<RequestReview[]>([])
+  const [resolvedReviews, setResolvedReviews] = useState<Record<string, DayRequest>>({})
+  const [reviewSheet, setReviewSheet] = useState<RequestReview | null>(null)
+  const [reviewError, setReviewError] = useState('')
   const [draftAction, setDraftAction] = useState<'save' | 'discard' | 'confirm' | null>(null)
   const [monthlyTargetHours, setMonthlyTargetHours] = useState<number>(168)
   const [activeCell, setActiveCell] = useState<ActiveShiftCell | null>(null)
@@ -165,6 +172,36 @@ export default function GeneratePage() {
     document.addEventListener('pointerdown', closeEditorOnOutsidePointer)
     return () => document.removeEventListener('pointerdown', closeEditorOnOutsidePointer)
   }, [closeShiftEditor])
+
+  useEffect(() => {
+    if (!store_id) return
+    const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
+    let cancelled = false
+    getRequestReviews(currentStoreId, targetMonthStr).then(result => {
+      if (cancelled) return
+      setResolvedReviews({})
+      if (result.ok) {
+        setRequestReviews(result.data)
+        setReviewError('')
+      } else {
+        setRequestReviews([])
+        setReviewError(result.error)
+      }
+    })
+    return () => { cancelled = true }
+  }, [store_id, targetMonthStr])
+
+  const resolveReview = async (review: RequestReview, request: DayRequest) => {
+    if (!store_id) return
+    const currentStoreId = Array.isArray(store_id) ? store_id[0] : store_id
+    setReviewError('')
+    const result = await resolveShiftRequest(currentStoreId, review.id, request.kind, request.start, request.end)
+    if (!result.ok) {
+      setReviewError(result.error)
+      return
+    }
+    setResolvedReviews(previous => ({ ...previous, [review.id]: result.data }))
+  }
 
   const loadAllSettings = useCallback(async () => {
     if (!store_id) return
@@ -336,34 +373,15 @@ export default function GeneratePage() {
     const staffData = inputsResult.data.staff
 
     const requests = inputsResult.data.requests as ShiftRequest[]
-    const staffNames = new Map(((staffData || []) as StaffRecord[]).map(staff => [staff.id, staff.name]))
-    const analysisWarnings: string[] = []
-    const pendingMemoRequests = requests.filter(request =>
-      Boolean(request.id && request.staff_id && request.date && request.memo?.trim())
-      && (request.parsed_request === null || request.parsed_request === undefined)
-    )
-
-    // Only notes without a cached result reach Gemini. Sequential calls avoid an avoidable rate-limit burst.
-    for (const request of pendingMemoRequests) {
-      try {
-        const response = await fetch('/api/parse-conditions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'daily_request', date: request.date, memo: request.memo, storeId: currentStoreId }),
-        })
-        if (!response.ok) throw new Error(await response.text())
-        const parsedRequest = parseParsedShiftRequest(await response.json())
-        if (!parsedRequest) throw new Error('Invalid parsed request response.')
-        unwrap(await saveParsedShiftRequest(currentStoreId, String(request.id), parsedRequest))
-        request.parsed_request = parsedRequest
-      } catch (error) {
-        console.error('日付要望のAI解析に失敗しました。', error)
-        const staffName = staffNames.get(request.staff_id || '') || 'スタッフ'
-        const day = Number(request.date?.slice(-2) || 0)
-        analysisWarnings.push(`${staffName}さんの${day || '対象'}日の要望解析に失敗したため、基本条件で生成しました。生成後に手動でご確認ください。`)
-      }
-    }
-    setRequestAnalysisWarning(analysisWarnings.join(' '))
+    // Requests are structured data; nothing is analysed here. Unread old memos use the usual conditions.
+    const pendingReviews = inputsResult.data.reviews
+    setRequestReviews(previous => {
+      const listed = new Set(previous.map(review => review.id))
+      return [...previous, ...pendingReviews.filter(review => !listed.has(review.id))]
+    })
+    setRequestAnalysisWarning(pendingReviews.length > 0
+      ? `要確認の要望が${pendingReviews.length}件残っているため、その日は基本条件で作成しました。`
+      : '')
 
     const schedule = generateSchedule({
       staff: (staffData || []) as StaffRecord[],
@@ -748,6 +766,30 @@ export default function GeneratePage() {
       {draftError && <p role="alert" className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{draftError}</p>}
       {requestAnalysisWarning && <p role="alert" className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{requestAnalysisWarning}</p>}
 
+      {(requestReviews.length > 0 || reviewError) && (
+        <RequestReviewPanel
+          reviews={requestReviews}
+          resolved={resolvedReviews}
+          error={reviewError}
+          onResolve={resolveReview}
+          onOpenTime={setReviewSheet}
+        />
+      )}
+      {reviewSheet && (
+        <DayRequestSheet
+          title={`${reviewSheet.staff_name} さん ${Number(reviewSheet.date.slice(5, 7))}月${Number(reviewSheet.date.slice(-2))}日`}
+          subtitle={reviewSheet.memo}
+          initial={resolvedReviews[reviewSheet.id] ?? null}
+          hours={businessHoursOf(storeInfo?.open_time, storeInfo?.close_time)}
+          onApply={request => {
+            const review = reviewSheet
+            setReviewSheet(null)
+            if (request) void resolveReview(review, request)
+          }}
+          onClose={() => setReviewSheet(null)}
+        />
+      )}
+
       <section className="mb-8">
         <div className="grid grid-cols-1 gap-0 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:items-stretch">
           <div className="rounded-l-md border border-r-0 border-[var(--border)] bg-white p-5 shadow-sm lg:max-w-[320px]">
@@ -1047,3 +1089,50 @@ function TabButton({ id, label, active, onClick }: { id: string; label: string; 
   )
 }
 
+const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
+
+/** Old memo-only requests the rules could not read. Unhandled ones use the usual conditions. */
+function RequestReviewPanel({ reviews, resolved, error, onResolve, onOpenTime }: {
+  reviews: RequestReview[]
+  resolved: Record<string, DayRequest>
+  error: string
+  onResolve: (review: RequestReview, request: DayRequest) => void
+  onOpenTime: (review: RequestReview) => void
+}) {
+  const remaining = reviews.filter(review => !resolved[review.id]).length
+  return (
+    <section aria-labelledby="request-review-title" className="mb-8 rounded-md border border-[var(--border)] bg-white p-4 shadow-sm sm:p-5">
+      <h2 id="request-review-title" className="text-lg font-bold text-slate-900">要確認の要望</h2>
+      <p className="mt-1 text-sm text-slate-600">メモだけで時間が決まらなかった要望です。入れなかったものは「希望なし」として作成します。</p>
+      {reviews.length > 0 && <p className="mt-3 text-[15px] font-bold text-slate-900">{remaining > 0 ? `残り ${remaining} 件` : 'すべて確認済み'}</p>}
+      {error && <p role="alert" className="mt-2 text-sm font-bold text-red-700">{error}</p>}
+      <ul className="mt-3 grid gap-2 md:grid-cols-2">
+        {reviews.map(review => {
+          const decided = resolved[review.id]
+          const date = new Date(`${review.date}T00:00:00`)
+          return (
+            <li key={review.id} className={`flex flex-col gap-2 rounded-md border border-slate-200 p-3 ${decided ? 'bg-slate-50' : 'bg-white'}`}>
+              <div className="flex justify-between gap-2 font-bold text-slate-900">
+                <span className="min-w-0 truncate">{review.staff_name} さん</span>
+                <span className="shrink-0 tabular-nums">{date.getMonth() + 1}月{date.getDate()}日（{WEEKDAY_LABELS[date.getDay()]}）</span>
+              </div>
+              <p className="whitespace-pre-wrap break-words rounded bg-slate-50 px-3 py-2 text-[15px] text-slate-800">{review.memo}</p>
+              {decided ? (
+                <div className="flex items-center gap-2">
+                  <span className={`font-bold ${decided.kind === 'off' ? 'text-red-700' : 'text-slate-900'}`}>{formatDayRequest(decided)}</span>
+                  <button type="button" onClick={() => onOpenTime(review)} className="ml-auto px-1 py-2 text-sm font-bold text-slate-600 underline underline-offset-4">変更</button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-[1fr_1fr_1.4fr] gap-1.5">
+                  <button type="button" onClick={() => onResolve(review, { kind: 'off', start: null, end: null })} className="min-h-12 rounded-md border border-slate-300 bg-white text-[15px] font-bold text-red-700 hover:bg-slate-50">休み</button>
+                  <button type="button" onClick={() => onResolve(review, { kind: 'any', start: null, end: null })} className="min-h-12 rounded-md border border-slate-300 bg-white text-[15px] font-bold text-slate-900 hover:bg-slate-50">終日OK</button>
+                  <button type="button" onClick={() => onOpenTime(review)} className="min-h-12 rounded-md border border-slate-300 bg-white text-[15px] font-bold text-slate-900 hover:bg-slate-50">時間を入れる</button>
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
