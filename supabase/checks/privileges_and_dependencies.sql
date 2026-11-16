@@ -147,3 +147,13 @@ select r as role,
        has_column_privilege(r, 'public.staff', 'weekly_availability', 'SELECT') as can_select,
        has_column_privilege(r, 'public.staff', 'weekly_availability', 'UPDATE') as can_update
   from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+-- 10) Saved schedules containing an impossible clock time such as 10:00-19:60
+--     (a display bug of the employee extension before commit "fix(generate): 19:60").
+--     The hours were always computed as 20:00, so only the text is wrong.
+--     If rows are listed, run supabase/maintenance/20261117_fix_minute_60_shift_labels.sql.
+select store_id, target_month, status,
+       (length(schedule_data::text) - length(replace(schedule_data::text, ':60', ''))) / 3 as labels_with_60
+  from public.monthly_shifts
+ where schedule_data::text ~ '[0-9]{2}:60'
+ order by target_month desc, store_id;

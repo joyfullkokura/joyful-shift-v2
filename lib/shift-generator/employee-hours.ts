@@ -15,6 +15,9 @@ import type { GeneratedStaffShift, StaffRecord } from './types'
 /** Longest shift (in clock hours) the extension step may create. */
 export const MAX_EXTENDED_SHIFT_HOURS = 10
 
+/** Extended ends lie on the same 15-minute grid as manual edits (ShiftTimeEditor). */
+export const EXTENSION_STEPS_PER_HOUR = 4
+
 export type EmployeeHoursAdjustment =
   | { type: 'swap'; date: string; employeeId: string; partTimeId: string }
   | { type: 'takeover'; date: string; employeeId: string; partTimeId: string }
@@ -156,20 +159,24 @@ const extendShift = (
     )
     const currentShiftHours = calculateActualHours(shift.start, shift.end)
     const otherShiftHours = employeeRow.assignedHours - currentShiftHours
-    let lowerEnd = shift.end
-    let upperEnd = availableEnd
-    for (let attempt = 0; attempt < 32; attempt++) {
-      const candidateEnd = (lowerEnd + upperEnd) / 2
-      const candidateHours = otherShiftHours + calculateActualHours(shift.start, candidateEnd)
-      if (candidateHours <= employeeTargetHours(context, employee)) lowerEnd = candidateEnd
-      else upperEnd = candidateEnd
+    const targetHours = employeeTargetHours(context, employee)
+    // The latest 15-minute end that keeps the month within the target. Candidates are
+    // exact quarters (k / 4), so no rounding error can reach the label. Paid hours are
+    // not monotonic in the end (breaks start at 6h / 8h), hence a full scan.
+    const EPSILON = 1e-9
+    const firstStep = Math.floor(shift.end * EXTENSION_STEPS_PER_HOUR + EPSILON) + 1
+    const lastStep = Math.floor(availableEnd * EXTENSION_STEPS_PER_HOUR + EPSILON)
+    let extendedEnd: number | null = null
+    for (let step = firstStep; step <= lastStep; step++) {
+      const candidateEnd = step / EXTENSION_STEPS_PER_HOUR
+      if (otherShiftHours + calculateActualHours(shift.start, candidateEnd) <= targetHours + EPSILON) extendedEnd = candidateEnd
     }
-    if (lowerEnd - shift.end <= 0.01) continue
-    shift.end = lowerEnd
-    slot.end = Math.max(slot.end, lowerEnd)
+    if (extendedEnd === null) continue
+    shift.end = extendedEnd
+    slot.end = Math.max(slot.end, extendedEnd)
     employeeRow.shifts[dateStr] = `${fToT(shift.start)}-${fToT(shift.end)}`
     employeeRow.assignedHours = actualHoursForShifts(employeeRow.shifts)
-    return { type: 'extend', date: dateStr, employeeId: employee.id, end: lowerEnd }
+    return { type: 'extend', date: dateStr, employeeId: employee.id, end: extendedEnd }
   }
   return null
 }

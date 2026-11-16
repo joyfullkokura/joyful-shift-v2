@@ -8,9 +8,14 @@ export const tToF = (t: string | undefined) => {
   return h + m / 60
 }
 
+/**
+ * Decimal hours to HH:MM. Rounds to whole minutes first, so a value such as
+ * 19.99999 becomes 20:00 (never 19:60).
+ */
 export const fToT = (f: number) => {
-  const h = Math.floor(f)
-  const m = Math.round((f % 1) * 60)
+  const totalMinutes = Math.round(f * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes - h * 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
@@ -23,11 +28,13 @@ export const toTimeRange = (startValue?: string | null, endValue?: string | null
   return end > start ? { start, end } : null
 }
 
+/** Clock time for alert messages; overnight times wrap (26 -> 02:00), but 24 stays 24:00. */
 export const formatAlertTime = (time: number) => {
-  if (time === 24) return '24:00'
-  const normalizedTime = time % 24
-  const hour = Math.floor(normalizedTime)
-  const minute = Math.round((normalizedTime - hour) * 60)
+  const totalMinutes = Math.round(time * 60)
+  if (totalMinutes === 24 * 60) return '24:00'
+  const minutesOfDay = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60)
+  const hour = Math.floor(minutesOfDay / 60)
+  const minute = minutesOfDay - hour * 60
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
