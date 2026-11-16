@@ -9,17 +9,20 @@ import PinLoginModal from '@/components/PinLoginModal'
 import { registerNewStaff } from '@/app/actions/auth'
 import { getUnreadNotificationCount } from '@/app/actions/dashboard'
 import type { LoginMember } from '@/lib/auth-types'
-import { TIME_OPTIONS } from '@/lib/staff-profile-options'
+import type { BusinessHours } from '@/lib/day-request'
+import { completeWeeklyAvailability, type WeeklyAvailabilityDraft } from '@/lib/weekly-availability'
+import WeeklyAvailabilityEditor from '@/components/WeeklyAvailabilityEditor'
 
 type StoreShellProps = {
   children: ReactNode
   storeId: string
   storeName: string
   members: LoginMember[]
+  hours: BusinessHours
   loadError: string
 }
 
-export default function StoreShell({ children, storeId, storeName, members, loadError }: StoreShellProps) {
+export default function StoreShell({ children, storeId, storeName, members, hours, loadError }: StoreShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const { currentStaff, isHydrated, isEmployee, login, logout } = useAdmin()
@@ -32,10 +35,7 @@ export default function StoreShell({ children, storeId, storeName, members, load
   const [newStaffWorkDays, setNewStaffWorkDays] = useState('3')
   const [newStaffPin, setNewStaffPin] = useState('')
   const [newStaffPinConfirmation, setNewStaffPinConfirmation] = useState('')
-  const [newStaffWorkStart1, setNewStaffWorkStart1] = useState('')
-  const [newStaffWorkEnd1, setNewStaffWorkEnd1] = useState('')
-  const [newStaffWorkStart2, setNewStaffWorkStart2] = useState('')
-  const [newStaffWorkEnd2, setNewStaffWorkEnd2] = useState('')
+  const [newStaffWeekly, setNewStaffWeekly] = useState<WeeklyAvailabilityDraft>({})
   const [newStaffMemo, setNewStaffMemo] = useState('')
   const [registrationError, setRegistrationError] = useState('')
   const [registrationMessage, setRegistrationMessage] = useState('')
@@ -83,14 +83,9 @@ export default function StoreShell({ children, storeId, storeName, members, load
       setRegistrationError('暗証番号が一致しません。もう一度入力してください。')
       return
     }
-    const hasIncompletePrimaryRange = Boolean(newStaffWorkStart1) !== Boolean(newStaffWorkEnd1)
-    const hasIncompleteSecondaryRange = Boolean(newStaffWorkStart2) !== Boolean(newStaffWorkEnd2)
-    if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
-      setRegistrationError('出勤可能時間帯は、開始時刻と終了時刻をセットで選択してください。')
-      return
-    }
-    if ((newStaffWorkStart1 && newStaffWorkStart1 >= newStaffWorkEnd1) || (newStaffWorkStart2 && newStaffWorkStart2 >= newStaffWorkEnd2)) {
-      setRegistrationError('終了時刻は開始時刻より後の時刻を選択してください。')
+    const weekly = completeWeeklyAvailability(newStaffWeekly)
+    if (!weekly) {
+      setRegistrationError('出勤できる時間を、すべての曜日について選んでください。')
       return
     }
     setIsSubmittingRegistration(true)
@@ -102,10 +97,7 @@ export default function StoreShell({ children, storeId, storeName, members, load
         employment_type: newStaffEmploymentType,
         main_job: newStaffMainJob,
         weekly_target_days: Number(newStaffWorkDays),
-        work_start_1: newStaffWorkStart1 || null,
-        work_end_1: newStaffWorkEnd1 || null,
-        work_start_2: newStaffWorkStart2 || null,
-        work_end_2: newStaffWorkEnd2 || null,
+        weekly_availability: weekly,
         memo: newStaffMemo.trim(),
       })
       if (result.status === 'locked') {
@@ -120,10 +112,7 @@ export default function StoreShell({ children, storeId, storeName, members, load
       setNewStaffName('')
       setNewStaffPin('')
       setNewStaffPinConfirmation('')
-      setNewStaffWorkStart1('')
-      setNewStaffWorkEnd1('')
-      setNewStaffWorkStart2('')
-      setNewStaffWorkEnd2('')
+      setNewStaffWeekly({})
       setNewStaffMemo('')
       window.dispatchEvent(new Event('staff-request-updated'))
     } catch (caughtError) {
@@ -176,6 +165,7 @@ export default function StoreShell({ children, storeId, storeName, members, load
               key={`${selectedStaff.id}:${selectedStaff.hasPin ? 'login' : 'setup'}`}
               staff={selectedStaff}
               storeId={storeId}
+              hours={hours}
               onClose={() => setSelectedStaff(null)}
               onSuccess={authenticatedStaff => {
                 login(authenticatedStaff)
@@ -200,9 +190,8 @@ export default function StoreShell({ children, storeId, storeName, members, load
                     <label className="block"><span className="text-xs font-medium text-slate-700">週の希望勤務日数 <span className="text-rose-600">（必須）</span></span><select value={newStaffWorkDays} onChange={event => setNewStaffWorkDays(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500">{[1, 2, 3, 4, 5, 6].map(days => <option key={days} value={days}>週{days}日</option>)}</select></label>
                     <label className="block"><span className="text-xs font-medium text-slate-700">雇用区分 <span className="text-rose-600">（必須）</span></span><select value={newStaffEmploymentType} onChange={event => setNewStaffEmploymentType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="アルバイト・パート">アルバイト・パート</option><option value="社員">社員</option></select><span className="mt-1 block text-[11px] text-slate-500">社員を選んだ場合も、店長の承認まではスタッフ権限で登録されます。</span></label>
                     <label className="block"><span className="text-xs font-medium text-slate-700">メイン職種 <span className="text-rose-600">（必須）</span></span><select value={newStaffMainJob} onChange={event => setNewStaffMainJob(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="ホール">ホール</option><option value="キッチン">キッチン</option><option value="共通">共通</option></select></label>
-                    <fieldset className="rounded-md border border-slate-200 p-3"><legend className="px-1 text-xs font-medium text-slate-700">出勤可能時間帯 1（基本）</legend><p className="-mt-1 text-[11px] text-slate-500">普段出勤できる時間帯（任意）</p><div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2"><select aria-label="出勤可能時間帯 1の開始時刻" value={newStaffWorkStart1} onChange={event => setNewStaffWorkStart1(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">開始</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select><span className="text-xs text-slate-400">〜</span><select aria-label="出勤可能時間帯 1の終了時刻" value={newStaffWorkEnd1} onChange={event => setNewStaffWorkEnd1(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">終了</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select></div></fieldset>
-                    <fieldset className="rounded-md border border-slate-200 p-3"><legend className="px-1 text-xs font-medium text-slate-700">出勤可能時間帯 2（サブ）</legend><p className="-mt-1 text-[11px] text-slate-500">他に誰もいなければ出てもよい時間帯（任意）</p><div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2"><select aria-label="出勤可能時間帯 2の開始時刻" value={newStaffWorkStart2} onChange={event => setNewStaffWorkStart2(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">開始</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select><span className="text-xs text-slate-400">〜</span><select aria-label="出勤可能時間帯 2の終了時刻" value={newStaffWorkEnd2} onChange={event => setNewStaffWorkEnd2(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500"><option value="">終了</option>{TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}</select></div></fieldset>
-                    <label className="block"><span className="text-xs font-medium text-slate-700">勤務に関する補足メモ（任意）</span><textarea value={newStaffMemo} onChange={event => setNewStaffMemo(event.target.value)} rows={3} placeholder="例: 火曜日は授業のため18時以降のみ可能です。土日は何時でも出勤できます。" className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" /></label>
+                    <fieldset><legend className="text-xs font-medium text-slate-700">出勤できる時間 <span className="text-rose-600">（必須）</span></legend><p className="mt-1 text-[11px] text-slate-500">ふだんの1週間について、曜日ごとに選んでください。</p><div className="mt-1"><WeeklyAvailabilityEditor value={newStaffWeekly} onChange={setNewStaffWeekly} hours={hours} /></div></fieldset>
+                    <label className="block"><span className="text-xs font-medium text-slate-700">店長へのメモ（任意）</span><textarea value={newStaffMemo} onChange={event => setNewStaffMemo(event.target.value)} rows={3} className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" /><span className="mt-1 block text-[11px] text-slate-500">メモはシフトの自動作成には使われません。</span></label>
                     {registrationError && <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{registrationError}</p>}
                     <div className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-slate-200 bg-white px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5"><button type="button" onClick={() => setIsRegistrationModalOpen(false)} disabled={isSubmittingRegistration} className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button><button type="button" onClick={() => void submitNewStaffRegistration()} disabled={isSubmittingRegistration} className="flex-[1.4] rounded-md bg-slate-800 px-3 py-2.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">登録を申請する</button></div>
                   </div>

@@ -1,6 +1,5 @@
 'use server'
 
-import { after } from 'next/server'
 import type {
   LoginResult,
   NewStaffRegistrationInput,
@@ -15,7 +14,6 @@ import {
   JOB_OPTIONS,
   MAX_MEMO_LENGTH,
   MAX_NAME_LENGTH,
-  TIME_OPTIONS,
   WEEKLY_DAY_OPTIONS,
 } from '@/lib/staff-profile-options'
 import {
@@ -28,7 +26,8 @@ import {
   requireSession,
   type StaffAuthRow,
 } from '@/lib/server/dal'
-import { analyzeAndStoreStaffConditions } from '@/lib/server/condition-analysis'
+import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
+import { parseWeeklyAvailability } from '@/lib/weekly-availability'
 import { hashPin, isValidPin, verifyPin } from '@/lib/server/pin'
 import { createSession, deleteSession } from '@/lib/server/session'
 import { getAdminClient } from '@/lib/server/supabase-admin'
@@ -51,15 +50,9 @@ const GENERIC_ERROR = '処理に失敗しました。時間をおいて再度お
 const isId = (value: unknown): value is string =>
   (typeof value === 'string' && value.length > 0 && value.length <= 64) ||
   (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
-const isTime = (value: unknown): value is string => typeof value === 'string' && TIME_OPTIONS.includes(value)
-const isOptionalTime = (value: unknown): value is string | null => value === null || isTime(value)
 const isMemo = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_MEMO_LENGTH
 const isWeeklyDays = (value: unknown): value is number => typeof value === 'number' && WEEKLY_DAY_OPTIONS.includes(value)
 const isJob = (value: unknown): value is string => typeof value === 'string' && JOB_OPTIONS.includes(value)
-
-const hasValidRanges = (start1: string | null, end1: string | null, start2: string | null, end2: string | null) =>
-  Boolean(start1) === Boolean(end1) && Boolean(start2) === Boolean(end2) &&
-  (!start1 || !end1 || start1 < end1) && (!start2 || !end2 || start2 < end2)
 
 const toSessionStaff = (row: StaffAuthRow): SessionStaff => ({ id: row.id, name: row.name, is_employee: row.is_employee })
 
@@ -183,10 +176,9 @@ export async function completeInitialSetup(
   try {
     if (!isValidStoreId(storeId) || !isId(staffId)) return { status: 'unavailable' }
     if (!isValidPin(pin)) return { status: 'error', message: '暗証番号は4〜8桁の数字で入力してください。' }
+    const weekly = parseWeeklyAvailability(profile.weekly_availability)
     if (!isWeeklyDays(profile.weekly_target_days) || !isJob(profile.main_job) || typeof profile.wants_employee !== 'boolean' ||
-      !isTime(profile.work_start_1) || !isTime(profile.work_end_1) ||
-      !isOptionalTime(profile.work_start_2) || !isOptionalTime(profile.work_end_2) || !isMemo(profile.memo) ||
-      !hasValidRanges(profile.work_start_1, profile.work_end_1, profile.work_start_2, profile.work_end_2)) {
+      !weekly || !isMemo(profile.memo)) {
       return { status: 'error', message: '入力内容を確認してください。' }
     }
 
@@ -197,16 +189,14 @@ export async function completeInitialSetup(
     if (!row || row.pin_hash || pendingIds.has(row.id)) return { status: 'unavailable' }
 
     const memo = profile.memo.trim()
+    const hours = await getStoreBusinessHours(storeId)
     const { data, error } = await getAdminClient()
       .from('staff')
       .update({
         pin_hash: await hashPin(pin),
         weekly_target_days: profile.weekly_target_days,
         main_job: profile.main_job,
-        work_start_1: profile.work_start_1,
-        work_end_1: profile.work_end_1,
-        work_start_2: profile.work_start_2,
-        work_end_2: profile.work_end_2,
+        ...weeklyAvailabilityColumns(weekly, hours),
         memo,
       })
       .eq('id', row.id)
@@ -215,14 +205,6 @@ export async function completeInitialSetup(
       .select('id')
     if (error) throw error
     if (!Array.isArray(data) || data.length === 0) return { status: 'unavailable' }
-
-    after(() => analyzeAndStoreStaffConditions(storeId, row.id, {
-      work_start_1: profile.work_start_1,
-      work_end_1: profile.work_end_1,
-      work_start_2: profile.work_start_2,
-      work_end_2: profile.work_end_2,
-      memo,
-    }))
 
     await createSession({ staffId: row.id, storeId, sessionVersion: row.session_version })
     return {
@@ -281,11 +263,9 @@ export async function registerNewStaff(storeId: string, input: NewStaffRegistrat
     const name = typeof input.name === 'string' ? input.name.trim() : ''
     if (!name || name.length > MAX_NAME_LENGTH) return { status: 'error', message: 'お名前を入力してください。' }
     if (!isValidPin(input.pin)) return { status: 'error', message: '暗証番号は4〜8桁の数字で入力してください。' }
+    const weekly = parseWeeklyAvailability(input.weekly_availability)
     if (typeof input.employment_type !== 'string' || !EMPLOYMENT_TYPE_OPTIONS.includes(input.employment_type) ||
-      !isJob(input.main_job) || !isWeeklyDays(input.weekly_target_days) ||
-      !isOptionalTime(input.work_start_1) || !isOptionalTime(input.work_end_1) ||
-      !isOptionalTime(input.work_start_2) || !isOptionalTime(input.work_end_2) || !isMemo(input.memo) ||
-      !hasValidRanges(input.work_start_1, input.work_end_1, input.work_start_2, input.work_end_2)) {
+      !isJob(input.main_job) || !isWeeklyDays(input.weekly_target_days) || !weekly || !isMemo(input.memo)) {
       return { status: 'error', message: '入力内容を確認してください。' }
     }
 
@@ -294,6 +274,7 @@ export async function registerNewStaff(storeId: string, input: NewStaffRegistrat
     if (await getStoreName(storeId) === null) return { status: 'error', message: '店舗が見つかりません。' }
 
     const memo = input.memo.trim()
+    const hours = await getStoreBusinessHours(storeId)
     const admin = getAdminClient()
     const { data: staff, error: staffError } = await admin
       .from('staff')
@@ -304,10 +285,7 @@ export async function registerNewStaff(storeId: string, input: NewStaffRegistrat
         is_employee: false,
         main_job: input.main_job,
         weekly_target_days: input.weekly_target_days,
-        work_start_1: input.work_start_1,
-        work_end_1: input.work_end_1,
-        work_start_2: input.work_start_2,
-        work_end_2: input.work_end_2,
+        ...weeklyAvailabilityColumns(weekly, hours),
         memo,
       })
       .select('id')
@@ -326,10 +304,7 @@ export async function registerNewStaff(storeId: string, input: NewStaffRegistrat
         employment_type: input.employment_type,
         main_job: input.main_job,
         weekly_target_days: input.weekly_target_days,
-        work_start_1: input.work_start_1,
-        work_end_1: input.work_end_1,
-        work_start_2: input.work_start_2,
-        work_end_2: input.work_end_2,
+        weekly_availability: weekly,
         memo,
       },
       status: 'pending',
@@ -339,13 +314,6 @@ export async function registerNewStaff(storeId: string, input: NewStaffRegistrat
       throw requestError
     }
 
-    after(() => analyzeAndStoreStaffConditions(storeId, staffId, {
-      work_start_1: input.work_start_1,
-      work_end_1: input.work_end_1,
-      work_start_2: input.work_start_2,
-      work_end_2: input.work_end_2,
-      memo,
-    }))
     return { status: 'ok' }
   } catch (error) {
     logUnexpected('registerNewStaff', error)

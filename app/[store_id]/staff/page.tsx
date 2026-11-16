@@ -3,7 +3,15 @@
 import { useEffect, useState } from 'react'
 import { addStaff, deleteStaff, getStaffPageData, saveStaffMember, saveStaffRoster } from '@/app/actions/staff'
 import { parseSkillOptions } from '@/lib/skill-options'
-import { formatParsedConditions } from '@/lib/parsed-conditions'
+import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
+import {
+  completeWeeklyAvailability,
+  formatWeeklyAvailability,
+  parseWeeklyAvailability,
+  weeklyFromWorkRanges,
+  type WeeklyAvailabilityDraft,
+} from '@/lib/weekly-availability'
+import WeeklyAvailabilityEditor from '@/components/WeeklyAvailabilityEditor'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
 import type { DataRow } from '@/lib/action-result'
@@ -25,9 +33,19 @@ type RosterStaff = {
   work_start_2: string | null
   work_end_2: string | null
   parsed_conditions: unknown
+  /** Saved on its own (weekday dialog), never by the bulk save. */
+  weekly_availability: unknown
 }
 
-type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions'>
+type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions' | 'weekly_availability'>
+
+/** Fields sent by the bulk / detail save: everything editable except the weekday choices. */
+const toSavePayload = (person: RosterStaff) => {
+  const payload: Partial<RosterStaff> = { ...person }
+  delete payload.weekly_availability
+  delete payload.parsed_conditions
+  return payload
+}
 
 const textOrNull = (value: unknown) => (typeof value === 'string' ? value : null)
 
@@ -46,6 +64,7 @@ const toRosterStaff = (row: DataRow): RosterStaff => ({
   work_start_2: textOrNull(row.work_start_2),
   work_end_2: textOrNull(row.work_end_2),
   parsed_conditions: row.parsed_conditions,
+  weekly_availability: row.weekly_availability,
 })
 
 export default function StaffPage() {
@@ -64,6 +83,9 @@ export default function StaffPage() {
   const [suggestionTarget, setSuggestionTarget] = useState<{ personId: string; slot: 'slot1' | 'slot2' } | null>(null)
   const [staffPendingDeletion, setStaffPendingDeletion] = useState<RosterStaff | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [hours, setHours] = useState<BusinessHours>(DEFAULT_BUSINESS_HOURS)
+  const [weeklyTarget, setWeeklyTarget] = useState<{ id: string; name: string; draft: WeeklyAvailabilityDraft } | null>(null)
+  const [isWeeklySaving, setIsWeeklySaving] = useState(false)
   const { notify } = useFlash()
 
   // --- 1. データ読み込み（スタッフ名簿 ＋ 店舗のスキル設定） ---
@@ -79,6 +101,7 @@ export default function StaffPage() {
       }
       setStaff(result.data.staff.map(toRosterStaff))
       setSkillOptions(parseSkillOptions(result.data.skillOptions))
+      setHours(result.data.hours)
     }
     fetchData()
   }, [notify, storeId])
@@ -118,7 +141,7 @@ export default function StaffPage() {
   const handleBulkSave = async () => {
     setIsBulkSaving(true)
     // Only editable fields of this store's existing staff are written (checked on the server).
-    const result = await saveStaffRoster(storeId, staff)
+    const result = await saveStaffRoster(storeId, staff.map(toSavePayload))
     if (!result.ok) notify('保存できませんでした: ' + result.error, 'error')
     else notify('すべての変更を保存しました。')
     setIsBulkSaving(false)
@@ -143,14 +166,40 @@ export default function StaffPage() {
     if (!newStaff) return
 
     setIsNewStaffSaving(true)
-    // The server saves the row and re-runs the AI condition analysis in the background.
-    const result = await saveStaffMember(storeId, newStaff)
+    const result = await saveStaffMember(storeId, toSavePayload(newStaff))
     if (!result.ok) {
       notify('詳細を保存できませんでした: ' + result.error, 'error')
     } else {
       setNewStaffId(null)
     }
     setIsNewStaffSaving(false)
+  }
+
+  const openWeeklyEditor = (person: RosterStaff) => {
+    setWeeklyTarget({
+      id: person.id,
+      name: person.name,
+      draft: parseWeeklyAvailability(person.weekly_availability) ?? weeklyFromWorkRanges(person.work_start_1, person.work_end_1),
+    })
+  }
+
+  const saveWeekly = async () => {
+    if (!weeklyTarget) return
+    const weekly = completeWeeklyAvailability(weeklyTarget.draft)
+    if (!weekly) {
+      notify('すべての曜日を選んでください。', 'error')
+      return
+    }
+    setIsWeeklySaving(true)
+    const result = await saveStaffMember(storeId, { id: weeklyTarget.id, weekly_availability: weekly })
+    setIsWeeklySaving(false)
+    if (!result.ok) {
+      notify('保存できませんでした: ' + result.error, 'error')
+      return
+    }
+    setStaff(prev => prev.map(person => person.id === weeklyTarget.id ? { ...person, weekly_availability: weekly } : person))
+    notify(`${weeklyTarget.name}さんの出勤できる時間を保存しました。`)
+    setWeeklyTarget(null)
   }
 
   const getWorkTimeSuggestions = (person: RosterStaff, slot: 'slot1' | 'slot2') => {
@@ -431,7 +480,7 @@ export default function StaffPage() {
 
           const slot1Suggestions = getWorkTimeSuggestions(person, 'slot1')
           const slot2Suggestions = getWorkTimeSuggestions(person, 'slot2')
-          const parsedConditionsSummary = formatParsedConditions(person.parsed_conditions)
+          const weeklySummary = formatWeeklyAvailability(person.weekly_availability)
 
           return (
             <div key={person.id} className="rounded-md border border-orange-200 bg-white p-3 shadow-sm md:p-4">
@@ -522,6 +571,18 @@ export default function StaffPage() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                <div className="min-w-0">
+                  <div className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">出勤できる時間（曜日ごと）</div>
+                  <div className={`text-sm ${weeklySummary ? 'font-medium text-slate-800' : 'text-slate-500'}`}>{weeklySummary ?? '未設定（下の出勤時間で作成します）'}</div>
+                </div>
+                {isAdmin && (
+                  <button type="button" onClick={() => openWeeklyEditor(person)} className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                    曜日ごとに設定
+                  </button>
+                )}
               </div>
 
               <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 md:grid-cols-[1.8fr_0.95fr]">
@@ -670,7 +731,6 @@ export default function StaffPage() {
                       )) || <span className="text-sm text-slate-400">未設定</span>}
                     </div>
                   )}
-                  {parsedConditionsSummary && <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-2 py-1 text-[10px] leading-4 text-sky-900">🤖 AI解析済: {parsedConditionsSummary}</p>}
                 </div>
               </div>
 
@@ -689,6 +749,21 @@ export default function StaffPage() {
           )
         })}
       </div>
+      {weeklyTarget && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !isWeeklySaving) setWeeklyTarget(null) }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="weekly-dialog-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-md border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 id="weekly-dialog-title" className="text-base font-bold text-slate-900">{weeklyTarget.name}さんの出勤できる時間</h2>
+            <p className="mt-1 text-xs text-slate-500">曜日ごとに選びます。シフトの自動作成では、時間帯（枠1・枠2）よりこちらを優先します。</p>
+            <div className="mt-2">
+              <WeeklyAvailabilityEditor value={weeklyTarget.draft} onChange={draft => setWeeklyTarget(current => current ? { ...current, draft } : current)} hours={hours} disabled={isWeeklySaving} />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setWeeklyTarget(null)} disabled={isWeeklySaving} className="min-h-11 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">キャンセル</button>
+              <button type="button" onClick={() => void saveWeekly()} disabled={isWeeklySaving} className="min-h-11 rounded-md bg-[var(--primary)] px-4 text-sm font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300">{isWeeklySaving ? '保存中...' : '保存'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,23 +1,23 @@
 'use server'
 
-import { after } from 'next/server'
 import type { ActionResult, DataRow } from '@/lib/action-result'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails } from '@/lib/staff-request-details'
 import { JOB_OPTIONS, MAX_MEMO_LENGTH, TIME_OPTIONS, WEEKLY_DAY_OPTIONS } from '@/lib/staff-profile-options'
 import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
-import { analyzeAndStoreStaffConditions } from '@/lib/server/condition-analysis'
+import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
+import { type BusinessHours, businessHoursOf } from '@/lib/day-request'
 import { requireAdmin, requireSession } from '@/lib/server/dal'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { clearFailures, staffThrottleKey } from '@/lib/server/throttle'
 import { assert, isDateKey, isId, isMonthStart, isShortText } from '@/lib/server/validation'
 
-const PROFILE_COLUMNS = 'id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, work_start_2, work_end_2, is_employee, parsed_conditions'
+const PROFILE_COLUMNS = 'id, name, weekly_target_days, main_job, memo, skills, work_start_1, work_end_1, work_start_2, work_end_2, is_employee, parsed_conditions, weekly_availability'
 const REQUEST_COLUMNS = 'id, staff_id, type, details, status, is_read_by_staff, created_at, resolved_at'
 
 export type LockedStaff = { id: string; name: string; lockedUntil: string }
 
 export type DashboardData = {
-  store: { name: string | null; notice: string | null; skill_options: unknown } | null
+  store: { name: string | null; notice: string | null; skill_options: unknown; hours: BusinessHours } | null
   schedule: unknown
   pinResetRequests: DataRow[]
   staffProfiles: DataRow[]
@@ -42,7 +42,7 @@ export async function getDashboard(storeId: string, targetMonth: string): Promis
       .eq('store_id', storeId).eq('type', 'condition_change').order('created_at', { ascending: false })
 
     const [storeResult, shiftResult, profilesResult, conditionResult] = await Promise.all([
-      db.from('stores').select('name, notice, skill_options').eq('store_id', storeId).maybeSingle(),
+      db.from('stores').select('name, notice, skill_options, open_time, close_time').eq('store_id', storeId).maybeSingle(),
       db.from('monthly_shifts').select('schedule_data')
         .eq('store_id', storeId).eq('target_month', targetMonth).eq('status', 'confirmed')
         .order('created_at', { ascending: false }).limit(1),
@@ -92,6 +92,7 @@ export async function getDashboard(storeId: string, targetMonth: string): Promis
         name: typeof store.name === 'string' ? store.name : null,
         notice: typeof store.notice === 'string' ? store.notice : null,
         skill_options: store.skill_options,
+        hours: businessHoursOf(store.open_time, store.close_time),
       } : null,
       schedule: latestShift?.schedule_data ?? null,
       pinResetRequests,
@@ -206,23 +207,12 @@ export async function resolveConditionRequest(storeId: string, requestId: string
           work_start_1: details.available_hours?.start || null,
           work_end_1: details.available_hours?.end || null,
         } : {}),
+        ...(details.weekly_availability
+          ? weeklyAvailabilityColumns(details.weekly_availability, await getStoreBusinessHours(storeId))
+          : {}),
       }
-      const { data: updated, error } = await db.from('staff').update(staffUpdate)
-        .eq('id', staffId).eq('store_id', storeId)
-        .select('work_start_1, work_end_1, work_start_2, work_end_2, memo')
-        .maybeSingle()
+      const { error } = await db.from('staff').update(staffUpdate).eq('id', staffId).eq('store_id', storeId)
       check(error)
-      const current = toRow(updated)
-      if (current) {
-        const time = (value: unknown) => (typeof value === 'string' ? value : null)
-        after(() => analyzeAndStoreStaffConditions(storeId, staffId, {
-          work_start_1: time(current.work_start_1),
-          work_end_1: time(current.work_end_1),
-          work_start_2: time(current.work_start_2),
-          work_end_2: time(current.work_end_2),
-          memo: typeof current.memo === 'string' ? current.memo : '',
-        }))
-      }
     }
 
     const resolvedAt = new Date().toISOString()
@@ -251,20 +241,17 @@ export async function resolveNewStaffRequest(storeId: string, requestId: string,
         is_employee: details.employment_type === '社員',
         main_job: details.main_job,
         weekly_target_days: details.weekly_target_days,
-        work_start_1: details.work_start_1,
-        work_end_1: details.work_end_1,
-        work_start_2: details.work_start_2,
-        work_end_2: details.work_end_2,
+        ...(details.weekly_availability
+          ? weeklyAvailabilityColumns(details.weekly_availability, await getStoreBusinessHours(storeId))
+          : {
+              work_start_1: details.work_start_1,
+              work_end_1: details.work_end_1,
+              work_start_2: details.work_start_2,
+              work_end_2: details.work_end_2,
+            }),
         memo: details.memo,
       }).eq('id', staffId).eq('store_id', storeId)
       check(error)
-      after(() => analyzeAndStoreStaffConditions(storeId, staffId, {
-        work_start_1: details.work_start_1,
-        work_end_1: details.work_end_1,
-        work_start_2: details.work_start_2,
-        work_end_2: details.work_end_2,
-        memo: details.memo,
-      }))
       const { error: requestError } = await db.from('staff_requests')
         .update({ status: 'approved', resolved_at: resolvedAt }).eq('id', requestId).eq('store_id', storeId)
       check(requestError)

@@ -42,8 +42,16 @@ describe('getNewStaffRegistrationDetails', () => {
         work_end_1: null,
         work_start_2: null,
         work_end_2: null,
+        weekly_availability: null,
         memo: '',
       })
+  })
+
+  it('reads the weekday choices of newer registrations', () => {
+    const off = { kind: 'off', start: null, end: null }
+    const weekly = { monday: off, tuesday: off, wednesday: off, thursday: off, friday: off, saturday: { kind: 'any', start: null, end: null }, sunday: off }
+    expect(getNewStaffRegistrationDetails({ name: 'A', employment_type: '社員', main_job: 'ホール', weekly_target_days: 1, weekly_availability: weekly })?.weekly_availability)
+      .toEqual(weekly)
   })
 
   it('rejects a non-string time', () => {

@@ -24,7 +24,8 @@ describe('parseWeeklyAvailability', () => {
   })
 
   it('rejects missing days, none and invalid ranges', () => {
-    const { sunday: _sunday, ...sixDays } = sample
+    const sixDays: Record<string, unknown> = { ...sample }
+    delete sixDays.sunday
     expect(parseWeeklyAvailability(sixDays)).toBeNull()
     expect(parseWeeklyAvailability({ ...sample, sunday: { kind: 'none', start: null, end: null } })).toBeNull()
     expect(parseWeeklyAvailability({ ...sample, friday: { kind: 'range', start: '14:00', end: '10:00' } })).toBeNull()

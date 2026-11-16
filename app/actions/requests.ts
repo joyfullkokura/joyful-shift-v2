@@ -4,14 +4,14 @@ import type { ActionResult } from '@/lib/action-result'
 import {
   type BusinessHours,
   type DayRequest,
-  businessHoursOf,
   convertLegacyRequest,
   dayRequestOfRow,
   isDayRequestKind,
   requestSpan,
   toDayRequest,
 } from '@/lib/day-request'
-import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
+import { UserFacingError, check, runAction, toRows } from '@/lib/server/action'
+import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { requireSession } from '@/lib/server/dal'
 import { CLEARED_ANALYSIS, type ExistingDayRequest, planMonthRequestSave } from '@/lib/server/request-save-plan'
 import { getAdminClient } from '@/lib/server/supabase-admin'
@@ -37,12 +37,7 @@ export type RequestsMonthData = {
   hours: BusinessHours
 }
 
-const getBusinessHours = async (storeId: string): Promise<BusinessHours> => {
-  const { data, error } = await getAdminClient().from('stores').select('open_time, close_time').eq('store_id', storeId).maybeSingle()
-  check(error)
-  const store = toRow(data)
-  return businessHoursOf(store?.open_time, store?.close_time)
-}
+const getBusinessHours = getStoreBusinessHours
 
 const toView = (row: Record<string, unknown>, hours: BusinessHours): DayRequestView => ({
   date: String(row.date),

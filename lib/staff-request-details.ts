@@ -1,6 +1,8 @@
 // Parsers for staff_requests.details. Shared by the dashboard UI and the
 // server actions that apply approved requests, so both read them identically.
 
+import { type WeeklyAvailability, parseWeeklyAvailability } from '@/lib/weekly-availability'
+
 export type AvailableHours = {
   start: string
   end: string
@@ -11,7 +13,9 @@ export type ConditionChangeDetails = {
   main_job: string
   memo: string
   skills?: string[]
+  /** Older requests only (one time band). */
   available_hours?: AvailableHours | null
+  weekly_availability?: WeeklyAvailability
 }
 
 export type NewStaffRegistrationDetails = {
@@ -23,6 +27,8 @@ export type NewStaffRegistrationDetails = {
   work_end_1: string | null
   work_start_2: string | null
   work_end_2: string | null
+  /** Registrations made after weekday choices were introduced. */
+  weekly_availability: WeeklyAvailability | null
   memo: string
 }
 
@@ -43,7 +49,21 @@ export const getConditionChangeDetails = (value: unknown): ConditionChangeDetail
       ? { start: hours.start, end: hours.end }
       : undefined
 
-  return { weekly_target_days: weeklyTargetDays, main_job: mainJob, memo, skills: parsedSkills, available_hours: availableHours }
+  let weeklyAvailability: WeeklyAvailability | undefined
+  if (value.weekly_availability !== undefined) {
+    const parsedWeekly = parseWeeklyAvailability(value.weekly_availability)
+    if (!parsedWeekly) return null
+    weeklyAvailability = parsedWeekly
+  }
+
+  return {
+    weekly_target_days: weeklyTargetDays,
+    main_job: mainJob,
+    memo,
+    skills: parsedSkills,
+    available_hours: availableHours,
+    ...(weeklyAvailability ? { weekly_availability: weeklyAvailability } : {}),
+  }
 }
 
 export const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistrationDetails | null => {
@@ -67,6 +87,7 @@ export const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistra
     work_end_1: workEnd1,
     work_start_2: workStart2,
     work_end_2: workEnd2,
+    weekly_availability: parseWeeklyAvailability(value.weekly_availability),
     memo: typeof memo === 'string' ? memo : '',
   }
 }

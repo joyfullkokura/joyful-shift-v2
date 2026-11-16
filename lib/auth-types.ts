@@ -1,6 +1,9 @@
 // Shapes shared between server actions and client components.
 // None of these ever carry pin_hash.
 
+import type { BusinessHours } from '@/lib/day-request'
+import type { WeeklyAvailability } from '@/lib/weekly-availability'
+
 /** The logged-in staff member as resolved from the server-verified session. */
 export type SessionStaff = {
   id: string
@@ -17,6 +20,7 @@ export type SetupDefaults = {
   work_start_2: string | null
   work_end_2: string | null
   memo: string | null
+  weekly_availability: WeeklyAvailability | null
 }
 
 /** One entry of the pre-login name picker. */
@@ -32,10 +36,7 @@ export type SetupProfileInput = {
   weekly_target_days: number
   main_job: string
   wants_employee: boolean
-  work_start_1: string
-  work_end_1: string
-  work_start_2: string | null
-  work_end_2: string | null
+  weekly_availability: WeeklyAvailability
   memo: string
 }
 
@@ -45,12 +46,12 @@ export type NewStaffRegistrationInput = {
   employment_type: string
   main_job: string
   weekly_target_days: number
-  work_start_1: string | null
-  work_end_1: string | null
-  work_start_2: string | null
-  work_end_2: string | null
+  weekly_availability: WeeklyAvailability
   memo: string
 }
+
+/** Public store facts the pre-login screens need (time buttons). */
+export type PublicStoreInfo = { hours: BusinessHours }
 
 export type ActionFailure = { status: 'error'; message: string }
 

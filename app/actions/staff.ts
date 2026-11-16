@@ -1,10 +1,11 @@
 'use server'
 
-import { after } from 'next/server'
 import type { ActionResult, DataRow } from '@/lib/action-result'
 import { MAX_MEMO_LENGTH, MAX_NAME_LENGTH } from '@/lib/staff-profile-options'
 import { STAFF_SECRET_COLUMNS, UserFacingError, check, omit, runAction, toRow, toRows } from '@/lib/server/action'
-import { analyzeAndStoreStaffConditions } from '@/lib/server/condition-analysis'
+import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
+import type { BusinessHours } from '@/lib/day-request'
+import { parseWeeklyAvailability } from '@/lib/weekly-availability'
 import { requireAdmin } from '@/lib/server/dal'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { INVALID_INPUT, assert, isId, isRecord, isShortText, isTimeText } from '@/lib/server/validation'
@@ -27,16 +28,23 @@ const EDITABLE_FIELDS: Record<string, (value: unknown) => unknown> = {
   work_end_1: value => (value === null || value === '' ? null : isTimeText(value) ? value : undefined),
   work_start_2: value => (value === null || value === '' ? null : isTimeText(value) ? value : undefined),
   work_end_2: value => (value === null || value === '' ? null : isTimeText(value) ? value : undefined),
+  weekly_availability: value => (value === null ? null : parseWeeklyAvailability(value) ?? undefined),
 }
 
-/** Picks and validates editable fields; unknown keys (id, store_id, pin_hash, ...) are ignored. */
-const toStaffUpdate = (input: Record<string, unknown>): DataRow => {
+/**
+ * Picks and validates editable fields; unknown keys (id, store_id, pin_hash, ...) are ignored.
+ * Weekday choices also rewrite the derived parsed_conditions.
+ */
+const toStaffUpdate = (input: Record<string, unknown>, hours: BusinessHours): DataRow => {
   const update: DataRow = {}
   for (const [field, validate] of Object.entries(EDITABLE_FIELDS)) {
     if (!(field in input)) continue
     const value = validate(input[field])
     if (value === undefined) throw new UserFacingError(`${INVALID_INPUT}（${field}）`)
     update[field] = value
+  }
+  if ('weekly_availability' in update) {
+    Object.assign(update, weeklyAvailabilityColumns(parseWeeklyAvailability(update.weekly_availability), hours))
   }
   return update
 }
@@ -48,29 +56,18 @@ const loadRoster = async (storeId: string): Promise<DataRow[]> => {
   return toRows(data).map(row => omit(row, STAFF_SECRET_COLUMNS))
 }
 
-const scheduleConditionAnalysis = (storeId: string, row: DataRow) => {
-  const time = (value: unknown) => (typeof value === 'string' && value ? value : null)
-  const staffId = String(row.id)
-  after(() => analyzeAndStoreStaffConditions(storeId, staffId, {
-    work_start_1: time(row.work_start_1),
-    work_end_1: time(row.work_end_1),
-    work_start_2: time(row.work_start_2),
-    work_end_2: time(row.work_end_2),
-    memo: typeof row.memo === 'string' ? row.memo : '',
-  }))
-}
-
-export type StaffPageData = { staff: DataRow[]; skillOptions: unknown }
+export type StaffPageData = { staff: DataRow[]; skillOptions: unknown; hours: BusinessHours }
 
 export async function getStaffPageData(storeId: string): Promise<ActionResult<StaffPageData>> {
   return runAction('getStaffPageData', async () => {
     await requireAdmin(storeId)
-    const [staff, storeResult] = await Promise.all([
+    const [staff, storeResult, hours] = await Promise.all([
       loadRoster(storeId),
       getAdminClient().from('stores').select('skill_options').eq('store_id', storeId).maybeSingle(),
+      getStoreBusinessHours(storeId),
     ])
     check(storeResult.error)
-    return { staff, skillOptions: toRow(storeResult.data)?.skill_options ?? null }
+    return { staff, skillOptions: toRow(storeResult.data)?.skill_options ?? null, hours }
   })
 }
 
@@ -102,9 +99,10 @@ export async function saveStaffRoster(storeId: string, rows: unknown): Promise<A
   return runAction('saveStaffRoster', async () => {
     await requireAdmin(storeId)
     assert(Array.isArray(rows) && rows.length <= 500)
+    const hours = await getStoreBusinessHours(storeId)
     const updates = rows.map(row => {
       assert(isRecord(row) && isId(row.id))
-      return { id: row.id, update: toStaffUpdate(row) }
+      return { id: row.id, update: toStaffUpdate(row, hours) }
     })
     const db = getAdminClient()
     for (const { id, update } of updates) {
@@ -116,19 +114,17 @@ export async function saveStaffRoster(storeId: string, rows: unknown): Promise<A
   })
 }
 
-/** Saves one staff member (new-staff detail form) and re-runs condition analysis. */
+/** Saves one staff member (new-staff detail form, weekday choices). */
 export async function saveStaffMember(storeId: string, row: unknown): Promise<ActionResult<null>> {
   return runAction('saveStaffMember', async () => {
     await requireAdmin(storeId)
     assert(isRecord(row) && isId(row.id))
-    const { data, error } = await getAdminClient().from('staff').update(toStaffUpdate(row))
+    const { data, error } = await getAdminClient().from('staff').update(toStaffUpdate(row, await getStoreBusinessHours(storeId)))
       .eq('id', row.id).eq('store_id', storeId)
-      .select('id, work_start_1, work_end_1, work_start_2, work_end_2, memo')
+      .select('id')
       .maybeSingle()
     check(error)
-    const saved = toRow(data)
-    if (!saved) throw new UserFacingError('対象のスタッフが見つかりません。')
-    scheduleConditionAnalysis(storeId, saved)
+    if (!toRow(data)) throw new UserFacingError('対象のスタッフが見つかりません。')
     return null
   })
 }

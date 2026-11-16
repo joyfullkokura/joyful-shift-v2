@@ -3,6 +3,7 @@ import { cache } from 'react'
 import type { LoginMember, SessionStaff } from '@/lib/auth-types'
 import { readSession } from '@/lib/server/session'
 import { getAdminClient } from '@/lib/server/supabase-admin'
+import { parseWeeklyAvailability } from '@/lib/weekly-availability'
 
 export class AuthorizationError extends Error {
   constructor(readonly reason: 'unauthenticated' | 'forbidden') {
@@ -79,7 +80,7 @@ export const listLoginMembers = async (storeId: string): Promise<LoginMember[]> 
   const [{ data, error }, pendingIds] = await Promise.all([
     getAdminClient()
       .from('staff')
-      .select('id, name, is_employee, pin_hash, weekly_target_days, main_job, work_start_1, work_end_1, work_start_2, work_end_2, memo')
+      .select('id, name, is_employee, pin_hash, weekly_target_days, main_job, work_start_1, work_end_1, work_start_2, work_end_2, memo, weekly_availability')
       .eq('store_id', storeId),
     getPendingNewStaffIds(storeId),
   ])
@@ -104,6 +105,7 @@ export const listLoginMembers = async (storeId: string): Promise<LoginMember[]> 
           work_start_2: text(row.work_start_2),
           work_end_2: text(row.work_end_2),
           memo: text(row.memo),
+          weekly_availability: parseWeeklyAvailability(row.weekly_availability),
         },
       }
     })

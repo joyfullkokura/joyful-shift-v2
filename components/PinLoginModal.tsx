@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, KeyRound, LockKeyhole, X } from 'lucide-react'
 import { changePin, completeInitialSetup as completeInitialSetupAction, loginWithPin, requestPinReset as requestPinResetAction, verifyCurrentPin } from '@/app/actions/auth'
 import type { LoginResult, PinCheckResult, SessionStaff, SetupDefaults } from '@/lib/auth-types'
-import { JOB_OPTIONS, TIME_OPTIONS } from '@/lib/staff-profile-options'
+import type { BusinessHours } from '@/lib/day-request'
+import { JOB_OPTIONS } from '@/lib/staff-profile-options'
+import { completeWeeklyAvailability, weeklyFromWorkRanges, type WeeklyAvailabilityDraft } from '@/lib/weekly-availability'
+import WeeklyAvailabilityEditor from '@/components/WeeklyAvailabilityEditor'
 import { queueFlashForNextScreen } from '@/components/FlashMessage'
 
 type PinLoginMode = 'setup' | 'login' | 'change'
@@ -21,6 +24,8 @@ type PinModalStaff = {
 type PinLoginModalProps = {
   staff: PinModalStaff
   storeId: string
+  /** Business hours for the time buttons of the first-time setup. */
+  hours?: BusinessHours
   mode?: PinLoginMode
   onClose: () => void
   onSuccess: (staff: SessionStaff) => void
@@ -42,10 +47,12 @@ function getMainJob(value: string | null | undefined) {
   return value && JOB_OPTIONS.includes(value) ? value : 'ホール'
 }
 
-function getTimeValue(value: string | null | undefined) {
-  const time = value?.slice(0, 5) ?? ''
-  return TIME_OPTIONS.includes(time) ? time : ''
+function getInitialWeekly(defaults: SetupDefaults | null): WeeklyAvailabilityDraft {
+  if (defaults?.weekly_availability) return defaults.weekly_availability
+  return weeklyFromWorkRanges(defaults?.work_start_1, defaults?.work_end_1)
 }
+
+const DEFAULT_HOURS: BusinessHours = { open: 9 * 60, close: 24 * 60 }
 
 /** User-facing message for a failed PIN check. */
 function describePinFailure(result: Exclude<PinCheckResult | LoginResult, { status: 'ok' }>, fallback: string): string {
@@ -61,33 +68,7 @@ function describePinFailure(result: Exclude<PinCheckResult | LoginResult, { stat
   }
 }
 
-function AvailabilityRange({ label, description, required = false, start, end, onStartChange, onEndChange }: {
-  label: string
-  description: string
-  required?: boolean
-  start: string
-  end: string
-  onStartChange: (value: string) => void
-  onEndChange: (value: string) => void
-}) {
-  return <fieldset className="rounded-md border border-slate-200 p-3">
-    <legend className="px-1 text-xs font-medium text-slate-700">{label}{required && <span className="ml-1 text-rose-600">（必須）</span>}</legend>
-    <p className="-mt-1 text-[11px] text-slate-500">{description}{!required && '（任意）'}</p>
-    <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-      <select aria-label={`${label}の開始時刻`} value={start} onChange={event => onStartChange(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
-        <option value="">開始</option>
-        {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
-      </select>
-      <span className="text-xs text-slate-400">〜</span>
-      <select aria-label={`${label}の終了時刻`} value={end} onChange={event => onEndChange(event.target.value)} className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
-        <option value="">終了</option>
-        {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
-      </select>
-    </div>
-  </fieldset>
-}
-
-export default function PinLoginModal({ staff, storeId, mode: requestedMode, onClose, onSuccess }: PinLoginModalProps) {
+export default function PinLoginModal({ staff, storeId, hours = DEFAULT_HOURS, mode: requestedMode, onClose, onSuccess }: PinLoginModalProps) {
   const defaults = staff.setupDefaults ?? null
   const mode: PinLoginMode = requestedMode ?? (staff.hasPin ? 'login' : 'setup')
   const initialStage: PinStage = mode === 'change' ? 'current' : mode === 'setup' ? 'profile' : 'pin'
@@ -102,10 +83,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
   const [targetWorkDays, setTargetWorkDays] = useState(() => getTargetWorkDays(defaults?.weekly_target_days))
   const [employmentType, setEmploymentType] = useState('part_time')
   const [mainJob, setMainJob] = useState(() => getMainJob(defaults?.main_job))
-  const [workStart1, setWorkStart1] = useState(() => getTimeValue(defaults?.work_start_1))
-  const [workEnd1, setWorkEnd1] = useState(() => getTimeValue(defaults?.work_end_1))
-  const [workStart2, setWorkStart2] = useState(() => getTimeValue(defaults?.work_start_2))
-  const [workEnd2, setWorkEnd2] = useState(() => getTimeValue(defaults?.work_end_2))
+  const [weekly, setWeekly] = useState<WeeklyAvailabilityDraft>(() => getInitialWeekly(defaults))
   const [memo, setMemo] = useState(() => defaults?.memo ?? '')
 
   const resetPin = useCallback(() => {
@@ -196,18 +174,9 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError('暗証番号が一致しません。もう一度入力してください。')
       return
     }
-    if (!workStart1 || !workEnd1) {
-      setError('出勤可能時間帯 1（基本）の開始時刻と終了時刻を選択してください。')
-      return
-    }
-    const hasIncompletePrimaryRange = Boolean(workStart1) !== Boolean(workEnd1)
-    const hasIncompleteSecondaryRange = Boolean(workStart2) !== Boolean(workEnd2)
-    if (hasIncompletePrimaryRange || hasIncompleteSecondaryRange) {
-      setError('出勤可能時間帯は、開始時刻と終了時刻をセットで選択してください。')
-      return
-    }
-    if ((workStart1 && workStart1 >= workEnd1) || (workStart2 && workStart2 >= workEnd2)) {
-      setError('終了時刻は開始時刻より後の時刻を選択してください。')
+    const weeklyAvailability = completeWeeklyAvailability(weekly)
+    if (!weeklyAvailability) {
+      setError('出勤できる時間を、すべての曜日について選んでください。')
       return
     }
     setIsProcessing(true)
@@ -217,10 +186,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
         weekly_target_days: Number(targetWorkDays),
         main_job: mainJob,
         wants_employee: employmentType === 'employee',
-        work_start_1: workStart1,
-        work_end_1: workEnd1,
-        work_start_2: workStart2 || null,
-        work_end_2: workEnd2 || null,
+        weekly_availability: weeklyAvailability,
         memo: memo.trim(),
       })
       if (result.status !== 'ok') {
@@ -241,7 +207,7 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
       setError('基本勤務条件を登録できませんでした。')
       setIsProcessing(false)
     }
-  }, [confirmPin, employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff.id, storeId, targetWorkDays, workEnd1, workEnd2, workStart1, workStart2])
+  }, [confirmPin, employmentType, isProcessing, mainJob, memo, onSuccess, pin, staff.id, storeId, targetWorkDays, weekly])
 
   const addDigit = useCallback((digit: string) => {
     if (isProcessing) return
@@ -386,11 +352,15 @@ export default function PinLoginModal({ staff, storeId, mode: requestedMode, onC
                     <option value="共通">共通</option>
                   </select>
                 </label>
-                <AvailabilityRange label="出勤可能時間帯 1（基本）" description="普段出勤できる時間帯" required start={workStart1} end={workEnd1} onStartChange={setWorkStart1} onEndChange={setWorkEnd1} />
-                <AvailabilityRange label="出勤可能時間帯 2（サブ）" description="他に誰もいなければ出てもよい時間帯" start={workStart2} end={workEnd2} onStartChange={setWorkStart2} onEndChange={setWorkEnd2} />
+                <fieldset>
+                  <legend className="text-xs font-medium text-slate-700">出勤できる時間 <span className="text-rose-600">（必須）</span></legend>
+                  <p className="mt-1 text-[11px] text-slate-500">ふだんの1週間について、曜日ごとに選んでください。</p>
+                  <div className="mt-1"><WeeklyAvailabilityEditor value={weekly} onChange={setWeekly} hours={hours} /></div>
+                </fieldset>
                 <label className="block">
-                  <span className="text-xs font-medium text-slate-700">勤務に関する補足メモ（任意）</span>
-                  <textarea value={memo} onChange={event => setMemo(event.target.value)} rows={3} placeholder="例: 火曜日は授業のため18時以降のみ可能です。土日は何時でも出勤できます。" className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" />
+                  <span className="text-xs font-medium text-slate-700">店長へのメモ（任意）</span>
+                  <textarea value={memo} onChange={event => setMemo(event.target.value)} rows={3} className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-500" />
+                  <span className="mt-1 block text-[11px] text-slate-500">メモはシフトの自動作成には使われません。</span>
                 </label>
               </div>
               {error && <p role="alert" className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs text-rose-700">{error}</p>}
