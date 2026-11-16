@@ -1,4 +1,6 @@
 import 'server-only'
+// Used only by /api/parse-conditions, kept for one release for screens still open
+// from before requests and conditions were chosen on screen. Remove afterwards.
 import { GoogleGenerativeAI, SchemaType, type ResponseSchema } from '@google/generative-ai'
 import {
   type ConditionAnalysisInput,
@@ -6,7 +8,6 @@ import {
   parseParsedConditions,
   parseParsedShiftRequest,
 } from '@/lib/parsed-conditions'
-import { getAdminClient } from '@/lib/server/supabase-admin'
 
 const modelName = process.env.GEMINI_MODEL || 'gemini-flash-latest'
 
@@ -125,19 +126,4 @@ export const analyzeDailyRequest = async (input: DailyRequestInput) => {
   const parsed = parseParsedShiftRequest(JSON.parse(text || 'null'))
   if (!parsed) throw new Error('Gemini returned an invalid daily request schema.')
   return parsed
-}
-
-/** Background job used after unauthenticated setup / registration. Never throws. */
-export const analyzeAndStoreStaffConditions = async (storeId: string, staffId: string, input: ConditionAnalysisInput): Promise<void> => {
-  try {
-    const parsed = await analyzeWeeklyConditions(input)
-    const { error } = await getAdminClient()
-      .from('staff')
-      .update({ parsed_conditions: parsed })
-      .eq('id', staffId)
-      .eq('store_id', storeId)
-    if (error) throw error
-  } catch (error) {
-    console.error('勤務条件のAI解析に失敗しました。', error)
-  }
 }
