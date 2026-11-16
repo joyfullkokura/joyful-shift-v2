@@ -1,14 +1,26 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getMyMonthRequests, getRequestsMonth, saveMyMonthRequests } from '@/app/actions/requests'
-import { unwrap, type DataRow } from '@/lib/action-result'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  type DayRequestInput,
+  type RequestStaff,
+  type StoreDayRequestView,
+  getMyMonthRequests,
+  getRequestsMonth,
+  saveMyMonthRequests,
+} from '@/app/actions/requests'
+import { unwrap } from '@/lib/action-result'
+import { type BusinessHours, type DayRequest, DEFAULT_BUSINESS_HOURS, formatDayRequest, timeToMinutes } from '@/lib/day-request'
 import { getHolidayName, isHoliday } from '@/lib/holidays'
 import { useParams } from 'next/navigation'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
 import { useAdmin } from '@/context/AdminContext'
 import { useFlash } from '@/components/FlashMessage'
+import DayRequestSheet from '@/components/DayRequestSheet'
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
 const getDateKind = (dateStr: string) => {
   const date = new Date(`${dateStr}T00:00:00`)
@@ -26,21 +38,30 @@ const excelCellBorder: Partial<ExcelJS.Borders> = {
   right: { style: 'thin' },
 }
 
-type RequestStaff = { id: string; name: string; is_employee: boolean }
-type MonthRequest = { staff_id: string; date: string; is_off: boolean; memo: string | null }
+/**
+ * One day being edited. request null with a memo is an old memo-only request
+ * the rules could not read; it is saved back unchanged until someone chooses.
+ */
+type DayEntry = { request: DayRequest | null; memo: string }
 
-const toRequestStaff = (row: DataRow): RequestStaff => ({
-  id: String(row.id),
-  name: typeof row.name === 'string' ? row.name : '',
-  is_employee: row.is_employee === true,
-})
+const hourText = (time: string | null) => {
+  const minutes = timeToMinutes(time)
+  if (minutes === null) return ''
+  return minutes % 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : String(minutes / 60)
+}
 
-const toMonthRequest = (row: DataRow): MonthRequest => ({
-  staff_id: String(row.staff_id),
-  date: String(row.date),
-  is_off: row.is_off === true,
-  memo: typeof row.memo === 'string' ? row.memo : null,
-})
+/** Very short label for the store-wide table (36px cells). */
+const compactLabel = (request: DayRequest | null) => {
+  if (!request) return ''
+  switch (request.kind) {
+    case 'off': return '休'
+    case 'any': return '終日'
+    case 'from': return `${hourText(request.start)}〜`
+    case 'until': return `〜${hourText(request.end)}`
+    case 'range': return `${hourText(request.start)}-${hourText(request.end)}`
+    default: return ''
+  }
+}
 
 const toColumnName = (index: number) => {
   let column = ''
@@ -53,19 +74,24 @@ const toColumnName = (index: number) => {
   return column
 }
 
+type SheetTarget = { dates: string[] }
+
 export default function RequestsPage() {
   const params = useParams()
   const storeId = params.store_id as string
   const { currentStaff } = useAdmin()
   const [staff, setStaff] = useState<RequestStaff[]>([])
   const selectedStaff = currentStaff
-  const [requests, setRequests] = useState<{[key: string]: {is_off: boolean, memo: string}}>({})
-  const [activeDate, setActiveDate] = useState<string | null>(null)
+  const [entries, setEntries] = useState<Record<string, DayEntry>>({})
+  const [hours, setHours] = useState<BusinessHours>(DEFAULT_BUSINESS_HOURS)
+  const [isMultiSelect, setIsMultiSelect] = useState(false)
+  const [selectedDates, setSelectedDates] = useState<string[]>([])
+  const [sheet, setSheet] = useState<SheetTarget | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   // Bumped after saving to re-read the month instead of reloading the page.
   const [reloadKey, setReloadKey] = useState(0)
   const { notify } = useFlash()
-  const [allRequests, setAllRequests] = useState<MonthRequest[]>([])
+  const [allRequests, setAllRequests] = useState<StoreDayRequestView[]>([])
 
   const now = new Date()
   const [viewDate, setViewDate] = useState(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -80,6 +106,9 @@ export default function RequestsPage() {
   const firstDayOfWeek = new Date(targetYear, targetMonth - 1, 1).getDay()
   const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1)
   const emptySlots = Array.from({ length: firstDayOfWeek }, (_, i) => i)
+  const dateKey = (day: number) => `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const dayOf = (date: string) => Number(date.slice(-2))
+  const weekdayOf = (date: string) => new Date(`${date}T00:00:00`).getDay()
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -87,10 +116,11 @@ export default function RequestsPage() {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       const result = await getRequestsMonth(storeId, startOfMonth)
       if (!result.ok) return
-      setStaff(result.data.staff.map(toRequestStaff).sort((left, right) =>
+      setStaff([...result.data.staff].sort((left, right) =>
         Number(right.is_employee) - Number(left.is_employee) || left.name.localeCompare(right.name, 'ja')
       ))
-      setAllRequests(result.data.requests.map(toMonthRequest))
+      setAllRequests(result.data.requests)
+      setHours(result.data.hours)
     }
     fetchInitialData()
   }, [storeId, viewDate, targetYear, targetMonth, daysInMonth, reloadKey])
@@ -101,11 +131,9 @@ export default function RequestsPage() {
         const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
         const result = await getMyMonthRequests(storeId, startOfMonth)
         if (!result.ok) return
-        const initialRequests: Record<string, { is_off: boolean; memo: string }> = {}
-        result.data.forEach(row => {
-          initialRequests[String(row.date)] = { is_off: row.is_off === true, memo: typeof row.memo === 'string' ? row.memo : '' }
-        })
-        setRequests(initialRequests)
+        const initial: Record<string, DayEntry> = {}
+        result.data.forEach(row => { initial[row.date] = { request: row.request, memo: row.memo } })
+        setEntries(initial)
       }
       fetchRequests()
     }
@@ -113,15 +141,55 @@ export default function RequestsPage() {
 
   const handleDateClick = (dateStr: string) => {
     if (isReadOnly) return
-    setRequests(prev => {
-      const current = prev[dateStr] || { is_off: false, memo: '' }
-      return { ...prev, [dateStr]: { is_off: !current.is_off, memo: current.memo } }
-    })
-    setActiveDate(dateStr)
+    if (isMultiSelect) {
+      setSelectedDates(previous => previous.includes(dateStr) ? previous.filter(date => date !== dateStr) : [...previous, dateStr].sort())
+      return
+    }
+    setSheet({ dates: [dateStr] })
   }
 
-  const updateMemo = (dateStr: string, text: string) => {
-    setRequests(prev => ({ ...prev, [dateStr]: { is_off: prev[dateStr]?.is_off || false, memo: text } }))
+  const setMultiSelect = (enabled: boolean) => {
+    setIsMultiSelect(enabled)
+    setSelectedDates([])
+  }
+
+  /** request null = 希望なし. With several dates, each keeps its own memo. */
+  const applyToDates = (dates: string[], request: DayRequest | null, memo: string | undefined) => {
+    setEntries(previous => {
+      const next = { ...previous }
+      dates.forEach(date => {
+        const keptMemo = memo ?? previous[date]?.memo ?? ''
+        const value: DayEntry = { request: request ?? { kind: 'none', start: null, end: null }, memo: keptMemo }
+        if (value.request?.kind === 'none' && !keptMemo.trim()) delete next[date]
+        else next[date] = value
+      })
+      return next
+    })
+  }
+
+  const handleSheetApply = (request: DayRequest | null, memo: string | undefined) => {
+    if (!sheet) return
+    applyToDates(sheet.dates, request, sheet.dates.length === 1 ? memo : undefined)
+    setSheet(null)
+    setSelectedDates([])
+    setIsMultiSelect(false)
+  }
+
+  /** Closing keeps the day's choice; a memo edited in the sheet is kept too. */
+  const handleSheetClose = (memo: string | undefined) => {
+    if (sheet && sheet.dates.length === 1 && memo !== undefined) {
+      const date = sheet.dates[0]
+      setEntries(previous => {
+        const existing = previous[date]
+        if ((existing?.memo ?? '') === memo) return previous
+        const next = { ...previous }
+        const request = existing ? existing.request : { kind: 'none' as const, start: null, end: null }
+        if (request?.kind === 'none' && !memo.trim()) delete next[date]
+        else next[date] = { request, memo }
+        return next
+      })
+    }
+    setSheet(null)
   }
 
   const handleSave = async () => {
@@ -130,11 +198,17 @@ export default function RequestsPage() {
     try {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       // Saved as the logged-in staff member; the server never takes a staff id from here.
-      const entries = Object.entries(requests)
-        .filter(([, val]) => val.is_off || val.memo.trim() !== '')
-        .map(([date, val]) => ({ date, is_off: val.is_off, memo: val.memo }))
-      unwrap(await saveMyMonthRequests(storeId, startOfMonth, entries))
-      notify(`${targetMonth}月の休み希望を保存しました。`)
+      const payload: DayRequestInput[] = Object.entries(entries)
+        .filter(([, entry]) => (entry.request && entry.request.kind !== 'none') || entry.memo.trim() !== '')
+        .map(([date, entry]) => ({
+          date,
+          kind: entry.request?.kind ?? null,
+          start: entry.request?.start ?? null,
+          end: entry.request?.end ?? null,
+          memo: entry.memo,
+        }))
+      unwrap(await saveMyMonthRequests(storeId, startOfMonth, payload))
+      notify(`${targetMonth}月の希望を提出しました。`)
       setReloadKey(key => key + 1)
     } catch (error) {
       notify('保存できませんでした: ' + (error instanceof Error ? error.message : '通信エラー'), 'error')
@@ -176,32 +250,27 @@ export default function RequestsPage() {
       currentRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' }
       currentRow.getCell(1).border = excelCellBorder
 
-      const staffOffCount = allRequests.filter(r => r.staff_id === person.id && r.is_off).length
+      const staffOffCount = allRequests.filter(r => r.staff_id === person.id && r.request?.kind === 'off').length
 
       daysArray.forEach((day, dayIdx) => {
-        const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+        const dateStr = dateKey(day)
         const req = allRequests.find(r => r.staff_id === person.id && r.date === dateStr)
         const cell = currentRow.getCell(dayIdx + 2)
-        const dateKind = getDateKind(dateStr)
-        const isOff = Boolean(req?.is_off)
+        const isOff = req?.request?.kind === 'off'
+        const timeText = isOff ? '' : formatDayRequest(req?.request ?? null, 'long')
         const memoText = (req?.memo || '').trim()
 
         cell.border = excelCellBorder
         cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }
 
         if (isOff) {
-          const offText = memoText ? `✖\n${memoText}` : '✖'
-          cell.value = offText
+          cell.value = memoText ? `✖\n${memoText}` : '✖'
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } }
           cell.font = { bold: true, size: 9, color: { argb: 'FFFF0000' } }
-          cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }
         } else {
-          cell.value = memoText ? `●\n${memoText}` : ''
+          cell.value = [timeText, memoText].filter(Boolean).join('\n')
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
-          cell.font = { color: { argb: 'FF333333' }, size: 7 }
-          if (memoText) {
-            cell.font = { ...cell.font, bold: true }
-          }
+          cell.font = { color: { argb: 'FF333333' }, size: 7, bold: Boolean(timeText || memoText) }
         }
       })
 
@@ -219,9 +288,7 @@ export default function RequestsPage() {
       cell.alignment = { horizontal: 'center', vertical: 'middle' }
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
       if (col >= 2 && col <= daysArray.length + 1) {
-        const day = col - 1
-        const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-        const dateKind = getDateKind(dateStr)
+        const dateKind = getDateKind(dateKey(col - 1))
         if (dateKind === 'holiday' || dateKind === 'sunday') {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } }
           cell.font = { bold: true, color: { argb: 'FFFF0000' }, size: 10 }
@@ -252,85 +319,123 @@ export default function RequestsPage() {
 
   const changeMonth = (diff: number) => {
     setViewDate(new Date(targetYear, targetMonth - 1 + diff, 1))
+    setMultiSelect(false)
+    setSheet(null)
   }
 
   if (!selectedStaff) {
     return <div className="p-8 text-center text-sm text-slate-500">ログイン情報を読み込んでいます...</div>
   }
 
+  const offCount = Object.values(entries).filter(entry => entry.request?.kind === 'off').length
+  const sheetTitle = (dates: string[]) => {
+    if (dates.length !== 1) return `${dates.length}日分をまとめて入力`
+    return `${targetMonth}月${dayOf(dates[0])}日（${WEEKDAYS[weekdayOf(dates[0])]}）`
+  }
+  const sheetSubtitle = (dates: string[]) => dates.length === 1
+    ? getHolidayName(dates[0]) ?? undefined
+    : dates.map(date => `${dayOf(date)}日`).join('・')
+
   return (
-    <div className="mx-auto max-w-[1600px] p-4 pb-20 md:p-8">
-      <div className="mx-auto mb-8 max-w-md rounded-lg border border-[var(--border)] bg-white p-6 shadow-sm">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-[var(--text)]">{targetMonth}月 <span className="font-normal text-[var(--text-subtle)]">希望</span></h1>
-            <p className="text-xs font-bold text-[var(--primary-strong)]">{selectedStaff.name} さん</p>
+    <div className={`mx-auto max-w-[1600px] p-4 md:p-8 ${isMultiSelect ? 'pb-48' : 'pb-20'}`}>
+      <div className="mx-auto mb-8 max-w-md rounded-md border border-[var(--border)] bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-slate-900">{targetYear}年{targetMonth}月の希望</h1>
+            <p className="mt-1 text-sm text-slate-600">{selectedStaff.name} さん</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => changeMonth(-1)} aria-label="前月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">←</button>
-            <button type="button" onClick={() => changeMonth(1)} aria-label="翌月" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50">→</button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button type="button" onClick={() => changeMonth(-1)} aria-label="前の月" className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"><ChevronLeft size={22} /></button>
+            <button type="button" onClick={() => changeMonth(1)} aria-label="次の月" className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"><ChevronRight size={22} /></button>
           </div>
         </div>
 
-        {isReadOnly && <p className="mb-4 text-center text-xs font-bold text-red-700">※過去の月のため編集できません</p>}
+        {isReadOnly
+          ? <p className="mb-3 text-sm font-bold text-red-700">過去の月のため変更できません。</p>
+          : (
+            <div className="-mb-1 flex min-h-9 justify-end">
+              <button type="button" onClick={() => setMultiSelect(!isMultiSelect)} className="px-1 py-2 text-[15px] font-bold text-slate-600 underline underline-offset-4">
+                {isMultiSelect ? '複数選択をやめる' : '複数の日を選ぶ'}
+              </button>
+            </div>
+          )}
 
-        <div className="mb-6 grid grid-cols-7 gap-2">
-          {['日', '月', '火', '水', '木', '金', '土'].map((d, i) => (
-            <div key={d} className={`text-center text-[10px] font-bold ${i === 0 ? 'text-red-600' : i === 6 ? 'text-sky-600' : 'text-slate-500'}`}>{d}</div>
+        <div className="mb-5 grid grid-cols-7 gap-1">
+          {WEEKDAYS.map((d, i) => (
+            <div key={d} className={`pb-0.5 text-center text-[13px] font-bold ${i === 0 ? 'text-red-600' : i === 6 ? 'text-sky-700' : 'text-slate-500'}`}>{d}</div>
           ))}
           {emptySlots.map(i => <div key={`empty-${i}`} />)}
           {daysArray.map(day => {
-            const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-            const req = requests[dateStr] || { is_off: false, memo: '' }
-            const isActive = activeDate === dateStr
-            const weekDay = new Date(targetYear, targetMonth - 1, day).getDay()
+            const dateStr = dateKey(day)
+            const entry = entries[dateStr]
+            const request = entry?.request ?? null
+            const isOff = request?.kind === 'off'
+            const isSelected = selectedDates.includes(dateStr)
+            const weekDay = weekdayOf(dateStr)
+            const holidayName = getHolidayName(dateStr)
+            const dayColor = isOff ? '' : weekDay === 0 || holidayName ? 'text-red-600' : weekDay === 6 ? 'text-sky-700' : 'text-slate-900'
+            const label = formatDayRequest(request, 'short')
+            const hasMemo = Boolean(entry?.memo.trim())
 
             return (
               <button
                 key={day}
+                type="button"
                 onClick={() => handleDateClick(dateStr)}
                 disabled={isReadOnly}
-                className={`relative flex h-14 flex-col items-center justify-center rounded-md border transition-colors ${
-                  req.is_off ? 'border-red-200 bg-red-600 text-white' : isActive ? 'border-orange-300 bg-orange-50 text-orange-700' : 'border-[var(--border)] bg-white text-[var(--text)] hover:border-slate-300'
-                }`}
+                aria-pressed={isMultiSelect ? isSelected : undefined}
+                aria-label={`${targetMonth}月${day}日 ${WEEKDAYS[weekDay]}曜${holidayName ? ` ${holidayName}` : ''} ${formatDayRequest(request) || '希望なし'}${hasMemo ? ' メモあり' : ''}`}
+                className={`relative flex min-h-16 min-w-0 flex-col items-center gap-0.5 rounded-md border px-0.5 pb-1 pt-1 transition-colors disabled:cursor-default ${
+                  isOff ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white hover:border-slate-300'
+                } ${isSelected ? 'outline outline-[3px] -outline-offset-1 outline-slate-800' : ''}`}
               >
-                <span className={`text-xs font-bold ${!req.is_off && !isActive && weekDay === 0 ? 'text-red-600' : !req.is_off && !isActive && weekDay === 6 ? 'text-sky-600' : ''}`}>
-                  {day}
-                </span>
-                {req.is_off && <span className="mt-0.5 text-[8px] font-bold">休み</span>}
-                {req.memo && !req.is_off && <span className="mt-1 h-1.5 w-1.5 rounded-full bg-orange-500" />}
+                <span className={`text-[15px] font-bold leading-tight tabular-nums ${isOff ? 'text-red-700' : dayColor}`}>{day}</span>
+                {label && (
+                  <span className={`whitespace-pre-line text-center font-bold leading-tight tabular-nums ${isOff ? 'text-[15px] text-red-700' : 'text-[11px] text-slate-900'}`}>{label}</span>
+                )}
+                {hasMemo && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-slate-500" aria-hidden="true" />}
               </button>
             )
           })}
         </div>
 
-        {activeDate && (
-          <div className="mb-6 rounded-md border border-[var(--border)] bg-slate-50 p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <label className="text-sm font-bold text-slate-700">{parseInt(activeDate.split('-')[2])}日の要望</label>
-            </div>
-            <textarea
-              className="w-full min-h-[88px] resize-none rounded-md border border-[var(--border)] bg-white p-3 text-sm text-[var(--text)] outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-              placeholder={isReadOnly ? '要望はありません' : '例: 18時以降なら可能など'}
-              rows={2}
-              readOnly={isReadOnly}
-              value={requests[activeDate]?.memo || ''}
-              onChange={(e) => updateMemo(activeDate, e.target.value)}
-            />
-          </div>
-        )}
-
         {!isReadOnly && (
-          <button onClick={handleSave} disabled={isSaving} className="w-full rounded-md bg-[var(--primary)] px-4 py-3.5 text-base font-bold text-white transition-colors hover:bg-[var(--primary-strong)] disabled:bg-slate-300">
-            {isSaving ? '保存中...' : 'この内容で確定保存'}
+          <button type="button" onClick={handleSave} disabled={isSaving} className="min-h-14 w-full rounded-md bg-[var(--primary)] px-4 text-[17px] font-bold text-white transition-colors hover:bg-[var(--primary-strong)] disabled:bg-slate-300">
+            {isSaving ? '保存中...' : `この内容で提出する（休み ${offCount}日）`}
           </button>
         )}
       </div>
 
+      {isMultiSelect && !isReadOnly && (
+        <div className="fixed inset-x-0 bottom-28 z-[60] border-t border-slate-200 bg-white px-4 py-3 md:bottom-0 md:left-[268px]">
+          <div className="mx-auto flex max-w-md items-center gap-2">
+            <span className="flex-1 text-[15px] font-bold text-slate-900">{selectedDates.length > 0 ? `${selectedDates.length}日を選択中` : '日付を選んでください'}</span>
+            <button type="button" disabled={selectedDates.length === 0} onClick={() => setSheet({ dates: selectedDates })}
+              className="min-h-[52px] rounded-md bg-[var(--primary)] px-5 text-base font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300 disabled:text-slate-500">
+              内容を入れる
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sheet && (
+        <DayRequestSheet
+          key={sheet.dates.join(',')}
+          title={sheetTitle(sheet.dates)}
+          subtitle={sheetSubtitle(sheet.dates)}
+          initial={sheet.dates.length === 1 ? entries[sheet.dates[0]]?.request ?? null : null}
+          hours={hours}
+          allowClear
+          memo={sheet.dates.length === 1 ? entries[sheet.dates[0]]?.memo ?? '' : undefined}
+          onApply={handleSheetApply}
+          onClose={handleSheetClose}
+        />
+      )}
+
       <section className="mt-8 border-t border-slate-200 pt-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">店舗全体の休み希望状況</h2>
+            <h2 className="text-base font-semibold text-slate-900">店舗全体の希望</h2>
             <p className="mt-1 text-xs text-slate-500">{targetYear}年{targetMonth}月</p>
           </div>
           <button type="button" onClick={exportToExcel} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50">休み希望をExcel出力</button>
@@ -342,7 +447,7 @@ export default function RequestsPage() {
               <tr>
                 <th className="sticky left-0 z-20 w-[112px] min-w-[112px] border border-slate-200 bg-slate-50 px-2 py-2 text-left font-semibold text-slate-700">スタッフ名</th>
                 {daysArray.map(day => {
-                  const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                  const dateStr = dateKey(day)
                   const dateKind = getDateKind(dateStr)
                   const headerClass = dateKind === 'holiday' || dateKind === 'sunday'
                     ? 'bg-red-50/40 text-red-600'
@@ -351,36 +456,40 @@ export default function RequestsPage() {
                       : 'bg-slate-50 text-slate-600'
                   return <th key={dateStr} title={getHolidayName(dateStr) ?? undefined} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
                 })}
-                <th className="w-[76px] min-w-[76px] border border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">希望日数</th>
+                <th className="w-[76px] min-w-[76px] border border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">休み日数</th>
               </tr>
             </thead>
             <tbody>
               {staff.map(person => {
                 const isCurrentStaff = person.id === selectedStaff.id
-                const offCount = allRequests.filter(request => request.staff_id === person.id && request.is_off).length
+                const personOffCount = allRequests.filter(request => request.staff_id === person.id && request.request?.kind === 'off').length
                 return (
                   <tr key={person.id} className={isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'}>
                     <th scope="row" className={`sticky left-0 z-10 w-[112px] min-w-[112px] border border-slate-200 px-2 py-2 text-left font-medium ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-800`}>
                       <span className="block max-w-[104px] truncate">{person.name}</span>
                     </th>
                     {daysArray.map(day => {
-                      const dateStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                      const request = allRequests.find(row => row.staff_id === person.id && row.date === dateStr)
-                      const isOff = Boolean(request?.is_off)
-                      const hasMemo = Boolean((request?.memo || '').trim())
+                      const dateStr = dateKey(day)
+                      const row = allRequests.find(request => request.staff_id === person.id && request.date === dateStr)
+                      const isOff = row?.request?.kind === 'off'
+                      const memo = (row?.memo || '').trim()
+                      const label = compactLabel(row?.request ?? null)
                       const dateKind = getDateKind(dateStr)
                       const dateTint = dateKind === 'holiday' || dateKind === 'sunday'
                         ? 'bg-red-50/20'
                         : dateKind === 'saturday'
                           ? 'bg-blue-50/20'
                           : ''
+                      const title = [formatDayRequest(row?.request ?? null), memo].filter(Boolean).join(' / ') || undefined
                       return (
-                        <td key={dateStr} title={(request?.memo || '').trim() || undefined} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center ${isOff ? 'bg-red-50 font-semibold text-red-600' : `${dateTint} ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-500`}`}>
-                          {isOff ? '×' : hasMemo ? <span className="font-bold text-amber-600" aria-label="メモあり">•</span> : ''}
+                        <td key={dateStr} title={title} className={`w-9 min-w-[36px] border border-slate-200 px-0.5 py-2 text-center ${isOff ? 'bg-red-50 font-semibold text-red-600' : `${dateTint} ${isCurrentStaff ? 'bg-amber-50/50' : 'bg-white'} text-slate-700`}`}>
+                          {label
+                            ? <span className="block leading-tight tabular-nums">{label}{memo && !isOff ? <span className="text-slate-400" aria-label="メモあり">•</span> : null}</span>
+                            : memo ? <span className="font-bold text-slate-500" aria-label="メモあり">•</span> : ''}
                         </td>
                       )
                     })}
-                    <td className={`border border-slate-200 px-2 py-2 text-right font-medium tabular-nums ${isCurrentStaff ? 'bg-amber-50/50 text-slate-900' : 'bg-slate-50/60 text-slate-700'}`}>{offCount}日</td>
+                    <td className={`border border-slate-200 px-2 py-2 text-right font-medium tabular-nums ${isCurrentStaff ? 'bg-amber-50/50 text-slate-900' : 'bg-slate-50/60 text-slate-700'}`}>{personOffCount}日</td>
                   </tr>
                 )
               })}
