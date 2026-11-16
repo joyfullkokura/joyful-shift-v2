@@ -133,3 +133,17 @@ select coalesce(request_kind, '(legacy)') as request_kind,
   from public.shift_requests
  group by 1
  order by 1;
+
+-- 9) Migration E (weekly availability). AFTER: the column and constraint exist and
+--    only the service role can use the column (expected: service_role true / true, others false / false).
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public' and table_name = 'staff' and column_name = 'weekly_availability';
+
+select conname from pg_constraint
+ where conrelid = 'public.staff'::regclass and conname = 'staff_weekly_availability_shape_check';
+
+select r as role,
+       has_column_privilege(r, 'public.staff', 'weekly_availability', 'SELECT') as can_select,
+       has_column_privilege(r, 'public.staff', 'weekly_availability', 'UPDATE') as can_update
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
