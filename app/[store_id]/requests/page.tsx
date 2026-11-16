@@ -92,6 +92,8 @@ export default function RequestsPage() {
   const [reloadKey, setReloadKey] = useState(0)
   const { notify } = useFlash()
   const [allRequests, setAllRequests] = useState<StoreDayRequestView[]>([])
+  /** Which month the editable calendar holds. Until it matches, nothing can be tapped or saved. */
+  const [myMonth, setMyMonth] = useState<{ month: string; status: 'ready' | 'error' } | null>(null)
 
   const now = new Date()
   const [viewDate, setViewDate] = useState(new Date(now.getFullYear(), now.getMonth() + 1, 1))
@@ -102,6 +104,9 @@ export default function RequestsPage() {
   const entryMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
   const isReadOnly = viewDate < entryMonthDate
 
+  const currentMonthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
+  const isMonthReady = myMonth?.month === currentMonthStart && myMonth.status === 'ready'
+  const monthLoadFailed = myMonth?.month === currentMonthStart && myMonth.status === 'error'
   const daysInMonth = new Date(targetYear, targetMonth, 0).getDate()
   const firstDayOfWeek = new Date(targetYear, targetMonth - 1, 1).getDay()
   const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1)
@@ -126,21 +131,26 @@ export default function RequestsPage() {
   }, [storeId, viewDate, targetYear, targetMonth, daysInMonth, reloadKey])
 
   useEffect(() => {
-    if (selectedStaff) {
-      const fetchRequests = async () => {
-        const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
-        const result = await getMyMonthRequests(storeId, startOfMonth)
-        if (!result.ok) return
-        const initial: Record<string, DayEntry> = {}
-        result.data.forEach(row => { initial[row.date] = { request: row.request, memo: row.memo } })
-        setEntries(initial)
+    if (!selectedStaff) return
+    let cancelled = false
+    const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
+    getMyMonthRequests(storeId, startOfMonth).then(result => {
+      if (cancelled) return
+      if (!result.ok) {
+        // Saving an empty month here would delete what is stored, so the month stays locked.
+        setMyMonth({ month: startOfMonth, status: 'error' })
+        return
       }
-      fetchRequests()
-    }
+      const initial: Record<string, DayEntry> = {}
+      result.data.forEach(row => { initial[row.date] = { request: row.request, memo: row.memo } })
+      setEntries(initial)
+      setMyMonth({ month: startOfMonth, status: 'ready' })
+    })
+    return () => { cancelled = true }
   }, [selectedStaff, storeId, targetYear, targetMonth, reloadKey])
 
   const handleDateClick = (dateStr: string) => {
-    if (isReadOnly) return
+    if (isReadOnly || !isMonthReady) return
     if (isMultiSelect) {
       setSelectedDates(previous => previous.includes(dateStr) ? previous.filter(date => date !== dateStr) : [...previous, dateStr].sort())
       return
@@ -193,7 +203,7 @@ export default function RequestsPage() {
   }
 
   const handleSave = async () => {
-    if (isReadOnly || !selectedStaff) return
+    if (isReadOnly || !selectedStaff || !isMonthReady) return
     setIsSaving(true)
     try {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
@@ -327,7 +337,10 @@ export default function RequestsPage() {
     return <div className="p-8 text-center text-sm text-slate-500">ログイン情報を読み込んでいます...</div>
   }
 
-  const offCount = Object.values(entries).filter(entry => entry.request?.kind === 'off').length
+  const monthEntries = Object.entries(entries).filter(([date]) => date.startsWith(currentMonthStart.slice(0, 8))).map(([, entry]) => entry)
+  const offCount = monthEntries.filter(entry => entry.request?.kind === 'off').length
+  const timeCount = monthEntries.filter(entry => entry.request && entry.request.kind !== 'off' && entry.request.kind !== 'none').length
+  const submitSummary = [offCount > 0 ? `休み${offCount}日` : '', timeCount > 0 ? `時間の希望${timeCount}日` : ''].filter(Boolean).join('・') || '希望なし'
   const sheetTitle = (dates: string[]) => {
     if (dates.length !== 1) return `${dates.length}日分をまとめて入力`
     return `${targetMonth}月${dayOf(dates[0])}日（${WEEKDAYS[weekdayOf(dates[0])]}）`
@@ -354,13 +367,19 @@ export default function RequestsPage() {
           ? <p className="mb-3 text-sm font-bold text-red-700">過去の月のため変更できません。</p>
           : (
             <div className="-mb-1 flex min-h-9 justify-end">
-              <button type="button" onClick={() => setMultiSelect(!isMultiSelect)} className="px-1 py-2 text-[15px] font-bold text-slate-600 underline underline-offset-4">
+              <button type="button" onClick={() => setMultiSelect(!isMultiSelect)} disabled={!isMonthReady} className="px-1 py-2 disabled:opacity-50 text-[15px] font-bold text-slate-600 underline underline-offset-4">
                 {isMultiSelect ? '複数選択をやめる' : '複数の日を選ぶ'}
               </button>
             </div>
           )}
 
-        <div className="mb-5 grid grid-cols-7 gap-1">
+        {!isMonthReady && (
+          <p role="status" className={`mb-2 text-sm font-bold ${monthLoadFailed ? 'text-red-700' : 'text-slate-500'}`}>
+            {monthLoadFailed ? '希望を読み込めませんでした。画面を開き直してください。' : '保存済みの希望を読み込んでいます…'}
+          </p>
+        )}
+
+        <div className={`mb-5 grid grid-cols-7 gap-1 ${isMonthReady || isReadOnly ? '' : 'opacity-50'}`} aria-busy={!isMonthReady}>
           {WEEKDAYS.map((d, i) => (
             <div key={d} className={`pb-0.5 text-center text-[13px] font-bold ${i === 0 ? 'text-red-600' : i === 6 ? 'text-sky-700' : 'text-slate-500'}`}>{d}</div>
           ))}
@@ -382,7 +401,7 @@ export default function RequestsPage() {
                 key={day}
                 type="button"
                 onClick={() => handleDateClick(dateStr)}
-                disabled={isReadOnly}
+                disabled={isReadOnly || !isMonthReady}
                 aria-pressed={isMultiSelect ? isSelected : undefined}
                 aria-label={`${targetMonth}月${day}日 ${WEEKDAYS[weekDay]}曜${holidayName ? ` ${holidayName}` : ''} ${formatDayRequest(request) || '希望なし'}${hasMemo ? ' メモあり' : ''}`}
                 className={`relative flex min-h-16 min-w-0 flex-col items-center gap-0.5 rounded-md border px-0.5 pb-1 pt-1 transition-colors disabled:cursor-default ${
@@ -400,14 +419,14 @@ export default function RequestsPage() {
         </div>
 
         {!isReadOnly && (
-          <button type="button" onClick={handleSave} disabled={isSaving} className="min-h-14 w-full rounded-md bg-[var(--primary)] px-4 text-[17px] font-bold text-white transition-colors hover:bg-[var(--primary-strong)] disabled:bg-slate-300">
-            {isSaving ? '保存中...' : `この内容で提出する（休み ${offCount}日）`}
+          <button type="button" onClick={handleSave} disabled={isSaving || !isMonthReady} className="min-h-14 w-full rounded-md bg-[var(--primary)] px-4 text-[17px] font-bold text-white transition-colors hover:bg-[var(--primary-strong)] disabled:bg-slate-300">
+            {isSaving ? '保存中...' : `提出する（${submitSummary}）`}
           </button>
         )}
       </div>
 
       {isMultiSelect && !isReadOnly && (
-        <div className="fixed inset-x-0 bottom-28 z-[60] border-t border-slate-200 bg-white px-4 py-3 md:bottom-0 md:left-[268px]">
+        <div className="fixed inset-x-0 bottom-[var(--mobile-nav-height,0px)] z-[60] border-t border-slate-200 bg-white px-4 py-3 md:bottom-0 md:left-[268px]">
           <div className="mx-auto flex max-w-md items-center gap-2">
             <span className="flex-1 text-[15px] font-bold text-slate-900">{selectedDates.length > 0 ? `${selectedDates.length}日を選択中` : '日付を選んでください'}</span>
             <button type="button" disabled={selectedDates.length === 0} onClick={() => setSheet({ dates: selectedDates })}
