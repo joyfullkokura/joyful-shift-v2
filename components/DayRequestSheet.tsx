@@ -134,7 +134,9 @@ export default function DayRequestSheet({
     <div className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/40" role="presentation"
       onMouseDown={event => { if (event.target === event.currentTarget) onClose(currentMemo) }}>
       <section role="dialog" aria-modal="true" aria-labelledby="day-request-sheet-title"
-        className="max-h-[88dvh] w-full max-w-md overflow-y-auto rounded-t-lg border border-slate-200 bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl">
+        className="flex max-h-[88dvh] w-full max-w-md flex-col rounded-t-lg border border-slate-200 bg-white shadow-2xl">
+        {/* Header and (on the time step) the 戻る / 決定 footer stay put; only the middle scrolls. */}
+        <div className="shrink-0 px-4 pt-2">
         <div className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-slate-300" aria-hidden="true" />
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -146,9 +148,10 @@ export default function DayRequestSheet({
             <X size={22} />
           </button>
         </div>
+        </div>
 
         {step === 'choose' && (
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <div className="overflow-hidden rounded-md border border-slate-300">
               {choices.map(choice => {
                 const isCurrent = draft.kind === choice.kind
@@ -185,10 +188,12 @@ export default function DayRequestSheet({
         )}
 
         {timeStep && (
-          <div className="space-y-3">
+          <>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
             <p className="text-base font-bold text-slate-900">{timeStep.heading}</p>
             <TimeGrid from={timeStep.from} to={timeStep.to} picked={timeStep.picked} minimum={timeStep.minimum} onPick={pickTime} />
-            <div className="grid grid-cols-[1fr_2fr] gap-2 pt-1">
+          </div>
+            <div className="grid shrink-0 grid-cols-[1fr_2fr] gap-2 border-t border-slate-200 bg-white px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
               <button type="button" onClick={() => setStep(step === 'rangeEnd' ? 'rangeStart' : 'choose')}
                 className="min-h-12 rounded-md border border-slate-300 bg-white px-3 text-[15px] font-bold text-slate-700 hover:bg-slate-50">戻る</button>
               <button type="button" onClick={confirm} disabled={!isComplete(draft)}
@@ -196,7 +201,7 @@ export default function DayRequestSheet({
                 {isComplete(draft) ? `${currentLabel} で決定` : '時間を選んでください'}
               </button>
             </div>
-          </div>
+          </>
         )}
       </section>
     </div>
