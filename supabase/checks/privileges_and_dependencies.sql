@@ -171,3 +171,26 @@ having count(*) > 1;
 select i.indexrelid::regclass as index_name, i.indisunique as is_unique, pg_get_indexdef(i.indexrelid) as definition
   from pg_index i
  where i.indexrelid = to_regclass('public.staff_requests_one_pending_condition_change');
+
+-- 12) Migration G (categories, display order, deadline, store events).
+--     AFTER: the columns, constraints and table exist; only the service role can use them
+--     (expected: service_role all true, anon / authenticated all false).
+select table_name, column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public'
+   and ((table_name = 'staff' and column_name in ('category', 'display_order'))
+     or (table_name = 'stores' and column_name = 'request_deadline_day')
+     or table_name = 'store_day_events')
+ order by table_name, column_name;
+
+select conname from pg_constraint
+ where conname in ('staff_category_check', 'stores_request_deadline_day_check', 'store_day_events_store_id_fkey')
+ order by conname;
+
+select r as role,
+       has_table_privilege(r, 'public.store_day_events', 'SELECT') as events_select,
+       has_table_privilege(r, 'public.store_day_events', 'INSERT') as events_insert,
+       has_column_privilege(r, 'public.staff', 'category', 'UPDATE') as staff_category_update,
+       has_column_privilege(r, 'public.stores', 'request_deadline_day', 'UPDATE') as stores_deadline_update,
+       (select relrowsecurity from pg_class where oid = 'public.store_day_events'::regclass) as events_rls
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
