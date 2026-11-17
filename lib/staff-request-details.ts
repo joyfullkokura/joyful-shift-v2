@@ -8,10 +8,15 @@ export type AvailableHours = {
   end: string
 }
 
+/**
+ * A requested change. Every field is optional: only the fields present are
+ * applied on approval (the usual-availability card sends weekly_availability
+ * alone; the profile form sends days / job / skills / memo).
+ */
 export type ConditionChangeDetails = {
-  weekly_target_days: number
-  main_job: string
-  memo: string
+  weekly_target_days?: number
+  main_job?: string
+  memo?: string
   skills?: string[]
   /** Older requests only (one time band). */
   available_hours?: AvailableHours | null
@@ -35,35 +40,40 @@ export type NewStaffRegistrationDetails = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+/**
+ * Reads a condition change. A field that is present must have the right type;
+ * at least one field must be present. Absent fields stay absent (not applied).
+ */
 export const getConditionChangeDetails = (value: unknown): ConditionChangeDetails | null => {
   if (!isRecord(value)) return null
+  const result: ConditionChangeDetails = {}
   const { weekly_target_days: weeklyTargetDays, main_job: mainJob, memo, skills, available_hours: hours } = value
-  if (!(typeof weeklyTargetDays === 'number' && typeof mainJob === 'string' && typeof memo === 'string')) return null
 
-  const parsedSkills = Array.isArray(skills) && skills.every((skill): skill is string => typeof skill === 'string')
-    ? skills
-    : undefined
-  const availableHours = hours === null
-    ? null
-    : isRecord(hours) && typeof hours.start === 'string' && typeof hours.end === 'string'
-      ? { start: hours.start, end: hours.end }
-      : undefined
-
-  let weeklyAvailability: WeeklyAvailability | undefined
+  if (weeklyTargetDays !== undefined) {
+    if (typeof weeklyTargetDays !== 'number') return null
+    result.weekly_target_days = weeklyTargetDays
+  }
+  if (mainJob !== undefined) {
+    if (typeof mainJob !== 'string') return null
+    result.main_job = mainJob
+  }
+  if (memo !== undefined) {
+    if (typeof memo !== 'string') return null
+    result.memo = memo
+  }
+  // Malformed skills in an old request are ignored (as before) so that it can still be approved.
+  if (Array.isArray(skills) && skills.every((skill): skill is string => typeof skill === 'string')) result.skills = skills
+  if (hours !== undefined) {
+    if (hours === null) result.available_hours = null
+    else if (isRecord(hours) && typeof hours.start === 'string' && typeof hours.end === 'string') result.available_hours = { start: hours.start, end: hours.end }
+    else return null
+  }
   if (value.weekly_availability !== undefined) {
     const parsedWeekly = parseWeeklyAvailability(value.weekly_availability)
     if (!parsedWeekly) return null
-    weeklyAvailability = parsedWeekly
+    result.weekly_availability = parsedWeekly
   }
-
-  return {
-    weekly_target_days: weeklyTargetDays,
-    main_job: mainJob,
-    memo,
-    skills: parsedSkills,
-    available_hours: availableHours,
-    ...(weeklyAvailability ? { weekly_availability: weeklyAvailability } : {}),
-  }
+  return Object.keys(result).length > 0 ? result : null
 }
 
 export const getNewStaffRegistrationDetails = (value: unknown): NewStaffRegistrationDetails | null => {

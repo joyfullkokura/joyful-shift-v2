@@ -20,11 +20,22 @@ describe('getConditionChangeDetails', () => {
 
   it('keeps an explicit null for available_hours and drops malformed skills', () => {
     expect(getConditionChangeDetails({ weekly_target_days: 2, main_job: 'キッチン', memo: 'x', skills: ['a', 1], available_hours: null }))
-      .toEqual({ weekly_target_days: 2, main_job: 'キッチン', memo: 'x', skills: undefined, available_hours: null })
+      .toEqual({ weekly_target_days: 2, main_job: 'キッチン', memo: 'x', available_hours: null })
   })
 
-  it('rejects missing required fields and non-objects', () => {
-    expect(getConditionChangeDetails({ main_job: 'ホール', memo: '' })).toBeNull()
+  it('accepts a request with only some fields and leaves the others absent', () => {
+    const off = { kind: 'off', start: null, end: null }
+    const weekly = { monday: off, tuesday: off, wednesday: off, thursday: off, friday: off, saturday: { kind: 'from', start: '18:00', end: null }, sunday: off }
+    expect(getConditionChangeDetails({ weekly_availability: weekly })).toEqual({ weekly_availability: weekly })
+    expect(getConditionChangeDetails({ main_job: 'ホール', memo: '' })).toEqual({ main_job: 'ホール', memo: '' })
+  })
+
+  it('rejects wrong types, invalid weekday choices, empty requests and non-objects', () => {
+    expect(getConditionChangeDetails({ weekly_target_days: '3' })).toBeNull()
+    expect(getConditionChangeDetails({ main_job: 1 })).toBeNull()
+    expect(getConditionChangeDetails({ weekly_availability: { monday: 'x' } })).toBeNull()
+    expect(getConditionChangeDetails({ available_hours: 'all day' })).toBeNull()
+    expect(getConditionChangeDetails({})).toBeNull()
     expect(getConditionChangeDetails(null)).toBeNull()
     expect(getConditionChangeDetails(['x'])).toBeNull()
   })

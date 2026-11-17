@@ -157,3 +157,17 @@ select store_id, target_month, status,
   from public.monthly_shifts
  where schedule_data::text ~ '[0-9]{2}:60'
  order by target_month desc, store_id;
+
+-- 11) Migration F (one pending condition change per staff member).
+--     BEFORE: must return zero rows (otherwise the unique index cannot be created).
+select store_id, staff_id, count(*) as pending_requests
+  from public.staff_requests
+ where type = 'condition_change' and status = 'pending'
+ group by store_id, staff_id
+having count(*) > 1;
+
+--     AFTER: the index exists and is unique and partial (expected: one row, is_unique = true,
+--     the definition ends with WHERE type = 'condition_change' AND status = 'pending').
+select i.indexrelid::regclass as index_name, i.indisunique as is_unique, pg_get_indexdef(i.indexrelid) as definition
+  from pg_index i
+ where i.indexrelid = to_regclass('public.staff_requests_one_pending_condition_change');

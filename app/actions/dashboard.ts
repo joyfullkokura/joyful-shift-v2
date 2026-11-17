@@ -2,7 +2,7 @@
 
 import type { ActionResult, DataRow } from '@/lib/action-result'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails } from '@/lib/staff-request-details'
-import { JOB_OPTIONS, MAX_MEMO_LENGTH, TIME_OPTIONS, WEEKLY_DAY_OPTIONS } from '@/lib/staff-profile-options'
+import { JOB_OPTIONS, MAX_MEMO_LENGTH, WEEKLY_DAY_OPTIONS } from '@/lib/staff-profile-options'
 import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
 import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
 import { type BusinessHours, businessHoursOf } from '@/lib/day-request'
@@ -140,29 +140,42 @@ export async function saveStoreNotice(storeId: string, notice: string): Promise<
   })
 }
 
-/** A staff member asks the manager to change their own working conditions. */
+const PENDING_CONDITION_CHANGE = '申請中の変更があります。店長の確認をお待ちください。'
+
+/**
+ * A staff member asks the manager to change their own working conditions.
+ * Only one request may be pending per person (also enforced by a unique index).
+ */
 export async function submitConditionChange(storeId: string, details: unknown): Promise<ActionResult<DataRow>> {
   return runAction('submitConditionChange', async () => {
     const session = await requireSession(storeId)
     const parsed = getConditionChangeDetails(details)
     assert(parsed)
-    assert(WEEKLY_DAY_OPTIONS.includes(parsed.weekly_target_days) && JOB_OPTIONS.includes(parsed.main_job))
-    assert(parsed.memo.length <= MAX_MEMO_LENGTH)
+    // New requests never carry the old single time band.
+    assert(parsed.available_hours === undefined)
+    assert(parsed.weekly_target_days === undefined || WEEKLY_DAY_OPTIONS.includes(parsed.weekly_target_days))
+    assert(parsed.main_job === undefined || JOB_OPTIONS.includes(parsed.main_job))
+    assert(parsed.memo === undefined || parsed.memo.length <= MAX_MEMO_LENGTH)
     assert(!parsed.skills || (parsed.skills.length <= 30 && parsed.skills.every(skill => skill.length <= 50)))
-    const hours = parsed.available_hours
-    assert(!hours || (TIME_OPTIONS.includes(hours.start) && TIME_OPTIONS.includes(hours.end) && hours.start < hours.end),
-      '勤務可能時間は開始時刻と終了時刻を正しく選択してください。')
 
-    const { data, error } = await getAdminClient().from('staff_requests')
+    const db = getAdminClient()
+    const { count, error: pendingError } = await db.from('staff_requests').select('id', { count: 'exact', head: true })
+      .eq('store_id', storeId).eq('staff_id', session.id).eq('type', 'condition_change').eq('status', 'pending')
+    check(pendingError)
+    if ((count ?? 0) > 0) throw new UserFacingError(PENDING_CONDITION_CHANGE)
+
+    const { data, error } = await db.from('staff_requests')
       .insert({
         store_id: storeId,
         staff_id: session.id,
         type: 'condition_change',
-        details: { ...parsed, memo: parsed.memo.trim() },
+        details: parsed.memo === undefined ? parsed : { ...parsed, memo: parsed.memo.trim() },
         status: 'pending',
       })
       .select(REQUEST_COLUMNS)
       .single()
+    // 23505: a request sent at the same moment won the unique index (migration F).
+    if (error?.code === '23505') throw new UserFacingError(PENDING_CONDITION_CHANGE)
     check(error)
     const row = toRow(data)
     if (!row) throw new Error('Insert returned no row.')
@@ -198,10 +211,11 @@ export async function resolveConditionRequest(storeId: string, requestId: string
     if (approved) {
       const details = getConditionChangeDetails(request.details)
       if (!details) throw new UserFacingError('申請内容を読み込めませんでした。')
+      // Only the fields the request contains are changed.
       staffUpdate = {
-        weekly_target_days: details.weekly_target_days,
-        main_job: details.main_job,
-        memo: details.memo,
+        ...(details.weekly_target_days !== undefined ? { weekly_target_days: details.weekly_target_days } : {}),
+        ...(details.main_job !== undefined ? { main_job: details.main_job } : {}),
+        ...(details.memo !== undefined ? { memo: details.memo } : {}),
         ...(details.skills ? { skills: details.skills.join(',') } : {}),
         ...(details.available_hours !== undefined ? {
           work_start_1: details.available_hours?.start || null,
