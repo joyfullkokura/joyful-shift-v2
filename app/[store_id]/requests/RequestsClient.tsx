@@ -21,6 +21,7 @@ import { useFlash } from '@/components/FlashMessage'
 import DayRequestSheet from '@/components/DayRequestSheet'
 import { CalendarSkeleton, LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
 import { type UsualAvailability, isSameAsUsual, usualAvailabilityOf, usualOnDate } from '@/lib/usual-availability'
+import { type DayEntry, applyDayChoice, toRequestPayload } from '@/lib/request-entries'
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -40,11 +41,6 @@ const excelCellBorder: Partial<ExcelJS.Borders> = {
   right: { style: 'thin' },
 }
 
-/**
- * One day being edited. request null with a memo is an old memo-only request
- * the rules could not read; it is saved back unchanged until someone chooses.
- */
-type DayEntry = { request: DayRequest | null; memo: string }
 
 const hourText = (time: string | null) => {
   const minutes = timeToMinutes(time)
@@ -195,19 +191,9 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   }
 
   /** request null = 希望なし. With several dates, each keeps its own memo. */
+  // The same as usual is no request at all: only days that differ are saved (lib/request-entries.ts).
   const applyToDates = (dates: string[], request: DayRequest | null, memo: string | undefined) => {
-    setEntries(previous => {
-      const next = { ...previous }
-      dates.forEach(date => {
-        const keptMemo = memo ?? previous[date]?.memo ?? ''
-        // The same as usual is no request at all (only days that differ are saved).
-        const sameAsUsual = isSameAsUsual(request, usualOnDate(usual, date))
-        const value: DayEntry = { request: request && !sameAsUsual ? request : { kind: 'none', start: null, end: null }, memo: keptMemo }
-        if (value.request?.kind === 'none' && !keptMemo.trim()) delete next[date]
-        else next[date] = value
-      })
-      return next
-    })
+    setEntries(previous => applyDayChoice(previous, dates, request, memo, usual))
   }
 
   const handleSheetApply = (request: DayRequest | null, memo: string | undefined) => {
@@ -243,15 +229,8 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
     try {
       const startOfMonth = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
       // Saved as the logged-in staff member; the server never takes a staff id from here.
-      const payload: DayRequestInput[] = Object.entries(entries)
-        .filter(([, entry]) => (entry.request && entry.request.kind !== 'none') || entry.memo.trim() !== '')
-        .map(([date, entry]) => ({
-          date,
-          kind: entry.request?.kind ?? null,
-          start: entry.request?.start ?? null,
-          end: entry.request?.end ?? null,
-          memo: entry.memo,
-        }))
+      // Days not sent (back to usual, no memo) are deleted by the server.
+      const payload: DayRequestInput[] = toRequestPayload(entries)
       unwrap(await saveMyMonthRequests(storeId, startOfMonth, payload))
       notify(`${targetMonth}月の希望を提出しました。`)
       setReloadKey(key => key + 1)
