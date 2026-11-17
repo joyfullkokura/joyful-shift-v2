@@ -34,14 +34,8 @@ import {
 import { unwrap } from '@/lib/action-result'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
-import {
-  completeWeeklyAvailability,
-  formatWeeklyAvailability,
-  parseWeeklyAvailability,
-  weeklyFromWorkRanges,
-  type WeeklyAvailabilityDraft,
-} from '@/lib/weekly-availability'
-import WeeklyAvailabilityEditor from '@/components/WeeklyAvailabilityEditor'
+import { formatWeeklyAvailability, type WeeklyAvailability } from '@/lib/weekly-availability'
+import UsualAvailabilityCard from '@/components/UsualAvailabilityCard'
 import { CardSkeleton, LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails, type ConditionChangeDetails } from '@/lib/staff-request-details'
 
@@ -193,7 +187,6 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
   const [requestedWorkDays, setRequestedWorkDays] = useState('3')
   const [requestedMainJob, setRequestedMainJob] = useState('ホール')
   const [requestedSkills, setRequestedSkills] = useState<string[]>([])
-  const [requestedWeekly, setRequestedWeekly] = useState<WeeklyAvailabilityDraft>({})
   const [storeHours, setStoreHours] = useState<BusinessHours>(() => storeOf(initialDashboard)?.hours ?? DEFAULT_BUSINESS_HOURS)
   const [requestedMemo, setRequestedMemo] = useState('')
   const [isSubmittingConditionRequest, setIsSubmittingConditionRequest] = useState(false)
@@ -252,8 +245,6 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
     setRequestedMainJob(currentProfile.main_job || 'ホール')
     setRequestedSkills(parseSkillOptions(currentProfile.skills)
       .filter(skill => skillOptions.includes(skill)))
-    setRequestedWeekly(parseWeeklyAvailability(currentProfile.weekly_availability)
-      ?? weeklyFromWorkRanges(currentProfile.work_start_1, currentProfile.work_end_1))
     setRequestedMemo(currentProfile.memo || '')
     setIsConditionModalOpen(true)
   }
@@ -358,11 +349,6 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
 
   const submitConditionChange = async () => {
     if (!currentStaff || isSubmittingConditionRequest) return
-    const weeklyAvailability = completeWeeklyAvailability(requestedWeekly)
-    if (!weeklyAvailability) {
-      setError('出勤できる時間を、すべての曜日について選んでください。')
-      return
-    }
     setIsSubmittingConditionRequest(true)
     setError('')
     try {
@@ -370,7 +356,6 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
         weekly_target_days: Number(requestedWorkDays),
         main_job: requestedMainJob,
         skills: requestedSkills,
-        weekly_availability: weeklyAvailability,
         memo: requestedMemo.trim(),
       }
       const created = unwrap(await submitConditionChangeAction(storeId, details))
@@ -446,7 +431,18 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
   )
   const getRequestStaff = (staffId: string) => staffProfiles.find(profile => profile.id === staffId)
   const currentSkills = (currentProfile?.skills || '').split(',').map(skill => skill.trim()).filter(Boolean)
-  const weeklySummary = formatWeeklyAvailability(currentProfile?.weekly_availability)
+  const myPendingConditionRequest = conditionRequests.find(request => request.staff_id === currentStaff?.id && request.status === 'pending') ?? null
+  const myPendingConditionDetails = myPendingConditionRequest ? getConditionChangeDetails(myPendingConditionRequest.details) : null
+
+  /** Weekday times only; the manager's approval applies them. */
+  const submitUsualAvailabilityChange = async (weekly: WeeklyAvailability): Promise<string | null> => {
+    const result = await submitConditionChangeAction(storeId, { weekly_availability: weekly } satisfies ConditionChangeDetails)
+    if (!result.ok) return result.error
+    setConditionRequests(current => [result.data as StaffRequestRecord, ...current])
+    setSuccessMessage('いつもの出勤できる時間の変更を店長へ申請しました。')
+    notifyRequestUpdate()
+    return null
+  }
   const toggleRequestedSkill = (skill: string) => {
     setRequestedSkills(current => current.includes(skill)
       ? current.filter(item => item !== skill)
@@ -553,12 +549,12 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
                       <p className="text-sm font-medium text-slate-800">{staff?.name || 'スタッフ'}さんの勤務条件変更</p>
                       <p className="mt-1 text-xs font-medium text-slate-500">申請日時: {new Date(request.created_at).toLocaleString('ja-JP')}</p>
                       <div className="mt-3 space-y-1 text-xs text-slate-600">
-                        <p>週希望日数: {staff?.weekly_target_days || '未設定'}日 → {details.weekly_target_days}日</p>
-                        <p>メイン職種: {staff?.main_job || '未設定'} → {details.main_job}</p>
+                        {details.weekly_target_days !== undefined && <p>週希望日数: {staff?.weekly_target_days || '未設定'}日 → {details.weekly_target_days}日</p>}
+                        {details.main_job !== undefined && <p>メイン職種: {staff?.main_job || '未設定'} → {details.main_job}</p>}
                         {details.skills && <p>習得スキル: {details.skills.length > 0 ? details.skills.join('、') : '登録なし'}</p>}
                         {details.available_hours !== undefined && <p>基本出勤可能時間: {details.available_hours ? `${details.available_hours.start}〜${details.available_hours.end}` : '登録なし'}</p>}
                         {details.weekly_availability && <p>出勤できる時間: {formatWeeklyAvailability(staff?.weekly_availability) ?? '未設定'} → {formatWeeklyAvailability(details.weekly_availability)}</p>}
-                        <p className="whitespace-pre-wrap">店長へのメモ: {staff?.memo || '未設定'} → {details.memo || '未設定'}</p>
+                        {details.memo !== undefined && <p className="whitespace-pre-wrap">店長へのメモ: {staff?.memo || '未設定'} → {details.memo || '未設定'}</p>}
                       </div>
                     </div>
                     <div className="flex shrink-0 gap-2">
@@ -697,6 +693,16 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
       </section>
 
       {!isAdmin && currentProfile && (
+        <UsualAvailabilityCard
+          profile={currentProfile}
+          hasPendingRequest={Boolean(myPendingConditionRequest)}
+          pendingWeekly={myPendingConditionDetails?.weekly_availability ?? null}
+          hours={storeHours}
+          onSubmit={submitUsualAvailabilityChange}
+        />
+      )}
+
+      {!isAdmin && currentProfile && (
         <section className="mb-5 rounded-md border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
@@ -707,14 +713,13 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
                   <div><dt className="text-xs font-medium text-slate-500">週の希望勤務日数</dt><dd className="mt-0.5 font-medium text-slate-800">週{currentProfile.weekly_target_days || 3}日</dd></div>
                   <div><dt className="text-xs font-medium text-slate-500">メイン職種</dt><dd className="mt-0.5 font-medium text-slate-800">{currentProfile.main_job || '未設定'}</dd></div>
                   <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">習得スキル</dt><dd className="mt-1 flex flex-wrap gap-1.5">{currentSkills.length > 0 ? currentSkills.map(skill => <span key={skill} className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{skill}</span>) : <span className="text-sm text-slate-600">登録なし</span>}</dd></div>
-                  {weeklySummary
-                    ? <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">出勤できる時間</dt><dd className="mt-0.5 font-medium text-slate-800">{weeklySummary}</dd></div>
-                    : <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">基本出勤可能時間</dt><dd className="mt-0.5 font-medium text-slate-800">{currentProfile.work_start_1 && currentProfile.work_end_1 ? `${currentProfile.work_start_1.slice(0, 5)}〜${currentProfile.work_end_1.slice(0, 5)}` : '登録なし'}</dd></div>}
                   <div className="sm:col-span-2"><dt className="text-xs font-medium text-slate-500">店長へのメモ</dt><dd className="mt-0.5 whitespace-pre-wrap text-slate-700">{currentProfile.memo || '登録されていません'}</dd></div>
                 </dl>
               </div>
             </div>
-            <button type="button" onClick={openConditionRequestModal} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"><UserRoundPen size={15} className="text-slate-500" />条件の変更を申請する</button>
+            {myPendingConditionRequest
+              ? <span role="status" className="shrink-0 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">申請中（店長の確認待ち）</span>
+              : <button type="button" onClick={openConditionRequestModal} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"><UserRoundPen size={15} className="text-slate-500" />条件の変更を申請する</button>}
           </div>
         </section>
       )}
@@ -743,11 +748,6 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
                     <p className="col-span-full text-xs text-slate-500">店舗にスキル項目が設定されていません。</p>
                   )}
                 </div>
-              </fieldset>
-              <fieldset>
-                <legend className="text-xs font-medium text-slate-700">出勤できる時間</legend>
-                <p className="mt-1 text-xs text-slate-500">ふだんの1週間について、曜日ごとに選んでください。</p>
-                <div className="mt-1"><WeeklyAvailabilityEditor value={requestedWeekly} onChange={setRequestedWeekly} hours={storeHours} disabled={isSubmittingConditionRequest} /></div>
               </fieldset>
               <label className="block"><span className="text-xs font-medium text-slate-700">店長へのメモ</span><textarea value={requestedMemo} onChange={event => setRequestedMemo(event.target.value)} rows={4} className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-slate-500" /><span className="mt-1 block text-xs text-slate-500">メモはシフトの自動作成には使われません。</span></label>
               <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsConditionModalOpen(false)} disabled={isSubmittingConditionRequest} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50">キャンセル</button><button type="button" onClick={() => void submitConditionChange()} disabled={isSubmittingConditionRequest} className="rounded-md bg-slate-800 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">店長に申請する</button></div>

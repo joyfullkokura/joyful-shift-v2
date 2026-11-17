@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import DayRequestSheet from '@/components/DayRequestSheet'
 import { type BusinessHours, type DayRequest, formatDayRequest } from '@/lib/day-request'
+import { changedWeekdays } from '@/lib/usual-availability'
 import { WEEKDAY_KEYS, WEEKDAY_LABELS, type WeekdayKey, type WeeklyAvailabilityDraft } from '@/lib/weekly-availability'
 
 const WEEKDAYS: WeekdayKey[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
@@ -12,12 +13,15 @@ const WEEKEND: WeekdayKey[] = ['saturday', 'sunday']
  * Usual availability per weekday: one row per weekday, tapping a row (or
  * several with 「複数の曜日を選ぶ」) opens the same sheet as the request screen.
  */
-export default function WeeklyAvailabilityEditor({ value, onChange, hours, disabled = false }: {
+export default function WeeklyAvailabilityEditor({ value, onChange, hours, disabled = false, baseline }: {
   value: WeeklyAvailabilityDraft
   onChange: (next: WeeklyAvailabilityDraft) => void
   hours: BusinessHours
   disabled?: boolean
+  /** When given (a change request), weekdays that differ from it are bold and marked 変更. */
+  baseline?: WeeklyAvailabilityDraft
 }) {
+  const changed = new Set(baseline ? changedWeekdays(baseline, value) : [])
   const [isMultiSelect, setIsMultiSelect] = useState(false)
   const [selected, setSelected] = useState<WeekdayKey[]>([])
   const [sheetDays, setSheetDays] = useState<WeekdayKey[] | null>(null)
@@ -77,8 +81,13 @@ export default function WeeklyAvailabilityEditor({ value, onChange, hours, disab
                 isSelected ? 'bg-slate-50 shadow-[inset_4px_0_0_#1e293b]' : 'bg-white hover:bg-slate-50'
               }`}>
               <span className={`text-lg font-bold ${dayColor}`}>{WEEKDAY_LABELS[day]}</span>
-              <span className={`text-[17px] tabular-nums ${!request ? 'font-medium text-slate-500' : request.kind === 'off' ? 'font-bold text-red-700' : 'font-bold text-slate-900'}`}>
-                {request ? formatDayRequest(request, 'long', '出られない') : '未設定'}
+              <span className="flex min-w-0 items-center justify-between gap-2">
+                <span className={`text-[17px] tabular-nums ${!request ? 'font-medium text-slate-500'
+                  : baseline && !changed.has(day) ? `font-medium ${request.kind === 'off' ? 'text-red-700/70' : 'text-slate-500'}`
+                    : request.kind === 'off' ? 'font-bold text-red-700' : 'font-bold text-slate-900'}`}>
+                  {request ? formatDayRequest(request, 'long', '出られない') : '未設定'}
+                </span>
+                {changed.has(day) && <span className="shrink-0 rounded border border-slate-300 px-1.5 text-xs font-bold text-slate-700">変更</span>}
               </span>
             </button>
           )
