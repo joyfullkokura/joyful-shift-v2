@@ -20,6 +20,7 @@ import { useAdmin } from '@/context/AdminContext'
 import { useFlash } from '@/components/FlashMessage'
 import DayRequestSheet from '@/components/DayRequestSheet'
 import { CalendarSkeleton, LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
+import { type UsualAvailability, isSameAsUsual, usualAvailabilityOf, usualOnDate } from '@/lib/usual-availability'
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -103,6 +104,9 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   const selectedStaff = currentStaff
   const [entries, setEntries] = useState<Record<string, DayEntry>>(() => toEntries(initial?.mine ?? []))
   const [hours, setHours] = useState<BusinessHours>(initial?.hours ?? DEFAULT_BUSINESS_HOURS)
+  const [usual, setUsual] = useState<UsualAvailability>(() => initial?.usual ?? usualAvailabilityOf(null))
+  /** One line under the calendar after a one-tap choice (休み / 終日OK) that differs from usual. */
+  const [statusNote, setStatusNote] = useState('')
   const [isMultiSelect, setIsMultiSelect] = useState(false)
   const [selectedDates, setSelectedDates] = useState<string[]>([])
   const [sheet, setSheet] = useState<SheetTarget | null>(null)
@@ -153,6 +157,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       setStaff(sortStaff(result.data.staff))
       setAllRequests(result.data.requests)
       setHours(result.data.hours)
+      setUsual(result.data.usual)
       setEntries(toEntries(result.data.mine))
       setLoaded({ key: loadKey, month: currentMonthStart, status: 'ready' })
     })
@@ -161,6 +166,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
 
   const handleDateClick = (dateStr: string) => {
     if (isReadOnly || !isMonthReady) return
+    setStatusNote('')
     if (isMultiSelect) {
       setSelectedDates(previous => previous.includes(dateStr) ? previous.filter(date => date !== dateStr) : [...previous, dateStr].sort())
       return
@@ -173,13 +179,30 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
     setSelectedDates([])
   }
 
+  /**
+   * One line comparing a choice with the usual availability (null when it is the same or unknown).
+   * Choosing exactly the usual value is not a change and is not saved.
+   */
+  const describeChoice = (dates: string[], request: DayRequest): string | null => {
+    if (usual.source === 'none' || request.kind === 'none') return null
+    if (dates.length === 1) {
+      const usualDay = usualOnDate(usual, dates[0])
+      if (!usualDay.long || isSameAsUsual(request, usualDay)) return null
+      return `いつもは「${usualDay.long}」です。この日だけ「${formatDayRequest(request)}」にします。ずっと変える場合はホームから申請してください。`
+    }
+    const different = dates.filter(date => !isSameAsUsual(request, usualOnDate(usual, date))).length
+    return `選んだ日のうち、いつもと違うのは${different}日です。`
+  }
+
   /** request null = 希望なし. With several dates, each keeps its own memo. */
   const applyToDates = (dates: string[], request: DayRequest | null, memo: string | undefined) => {
     setEntries(previous => {
       const next = { ...previous }
       dates.forEach(date => {
         const keptMemo = memo ?? previous[date]?.memo ?? ''
-        const value: DayEntry = { request: request ?? { kind: 'none', start: null, end: null }, memo: keptMemo }
+        // The same as usual is no request at all (only days that differ are saved).
+        const sameAsUsual = isSameAsUsual(request, usualOnDate(usual, date))
+        const value: DayEntry = { request: request && !sameAsUsual ? request : { kind: 'none', start: null, end: null }, memo: keptMemo }
         if (value.request?.kind === 'none' && !keptMemo.trim()) delete next[date]
         else next[date] = value
       })
@@ -189,6 +212,8 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
 
   const handleSheetApply = (request: DayRequest | null, memo: string | undefined) => {
     if (!sheet) return
+    // The time step already showed the comparison in the panel; one-tap choices show it under the calendar.
+    setStatusNote(request && (request.kind === 'off' || request.kind === 'any') ? describeChoice(sheet.dates, request) ?? '' : '')
     applyToDates(sheet.dates, request, sheet.dates.length === 1 ? memo : undefined)
     setSheet(null)
     setSelectedDates([])
@@ -408,6 +433,8 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
             const holidayName = getHolidayName(dateStr)
             const dayColor = isOff ? '' : weekDay === 0 || holidayName ? 'text-red-600' : weekDay === 6 ? 'text-sky-700' : 'text-slate-900'
             const label = formatDayRequest(request, 'short')
+            // Days without a request show the usual availability faintly.
+            const usualLabel = label ? '' : usualOnDate(usual, dateStr).short
             const hasMemo = Boolean(entry?.memo.trim())
 
             return (
@@ -417,7 +444,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
                 onClick={() => handleDateClick(dateStr)}
                 disabled={isReadOnly || !isMonthReady}
                 aria-pressed={isMultiSelect ? isSelected : undefined}
-                aria-label={`${targetMonth}月${day}日 ${WEEKDAYS[weekDay]}曜${holidayName ? ` ${holidayName}` : ''} ${formatDayRequest(request) || '希望なし'}${hasMemo ? ' メモあり' : ''}`}
+                aria-label={`${targetMonth}月${day}日 ${WEEKDAYS[weekDay]}曜${holidayName ? ` ${holidayName}` : ''} ${formatDayRequest(request) || (usualLabel ? `いつもどおり（${usualOnDate(usual, dateStr).long}）` : '希望なし')}${hasMemo ? ' メモあり' : ''}`}
                 className={`relative flex min-h-16 min-w-0 flex-col items-center gap-0.5 rounded-md border px-0.5 pb-1 pt-1 transition-colors disabled:cursor-default ${
                   isOff ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white hover:border-slate-300'
                 } ${isSelected ? 'outline outline-[3px] -outline-offset-1 outline-slate-800' : ''}`}
@@ -426,12 +453,17 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
                 {label && (
                   <span className={`whitespace-pre-line text-center font-bold leading-tight tabular-nums ${isOff ? 'text-[15px] text-red-700' : 'text-[11px] text-slate-900'}`}>{label}</span>
                 )}
+                {usualLabel && (
+                  <span aria-hidden="true" className="whitespace-pre-line text-center text-[11px] font-medium leading-tight tabular-nums text-slate-400">{usualLabel}</span>
+                )}
                 {hasMemo && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-slate-500" aria-hidden="true" />}
               </button>
             )
           })}
         </div>
         )}
+
+        <p role="status" aria-live="polite" className={`text-[13px] font-medium leading-snug text-slate-600 ${statusNote ? '-mt-2 mb-4' : 'sr-only'}`}>{statusNote}</p>
 
         {!isReadOnly && (
           <button type="button" onClick={handleSave} disabled={isSaving || !isMonthReady} className="min-h-14 w-full rounded-md bg-[var(--primary)] px-4 text-[17px] font-bold text-white transition-colors hover:bg-[var(--primary-strong)] disabled:bg-slate-300">
@@ -457,7 +489,9 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
           key={sheet.dates.join(',')}
           title={sheetTitle(sheet.dates)}
           subtitle={sheetSubtitle(sheet.dates)}
-          initial={sheet.dates.length === 1 ? entries[sheet.dates[0]]?.request ?? null : null}
+          initial={sheet.dates.length === 1 ? (entries[sheet.dates[0]]?.request ?? usualOnDate(usual, sheet.dates[0]).request) : null}
+          usualLabel={sheet.dates.length === 1 ? usualOnDate(usual, sheet.dates[0]).long || undefined : undefined}
+          describeChoice={request => describeChoice(sheet.dates, request)}
           hours={hours}
           allowClear
           memo={sheet.dates.length === 1 ? entries[sheet.dates[0]]?.memo ?? '' : undefined}

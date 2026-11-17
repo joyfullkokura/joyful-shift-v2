@@ -27,6 +27,10 @@ type DayRequestSheetProps = {
   allowClear?: boolean
   /** Memo for the manager; undefined hides the memo box. */
   memo?: string
+  /** 「いつも：18:00〜」 under the title (one date). */
+  usualLabel?: string
+  /** One line comparing a choice with the usual availability, or null when there is nothing to say. */
+  describeChoice?: (request: DayRequest) => string | null
   /** request null = 希望なし. */
   onApply: (request: DayRequest | null, memo: string | undefined) => void
   /** Closing keeps the chosen request; an edited memo is handed back. */
@@ -62,7 +66,7 @@ const isComplete = (draft: Draft) =>
  * 30-minute steps within the business hours. No keyboard entry for times.
  */
 export default function DayRequestSheet({
-  title, subtitle, initial, hours, offLabel = '休み', allowClear = false, memo, onApply, onClose,
+  title, subtitle, initial, hours, offLabel = '休み', allowClear = false, memo, usualLabel, describeChoice, onApply, onClose,
 }: DayRequestSheetProps) {
   const [step, setStep] = useState<Step>('choose')
   const [draft, setDraft] = useState<Draft>(() => toDraft(initial))
@@ -122,6 +126,8 @@ export default function DayRequestSheet({
   })()
 
   const currentLabel = formatDayRequest(toRequest(draft), 'long', offLabel)
+  const completeRequest = isComplete(draft) ? toRequest(draft) : null
+  const choiceNote = completeRequest && describeChoice ? describeChoice(completeRequest) : null
   const choices: { kind: DayRequestKind; label: string }[] = [
     { kind: 'off', label: offLabel },
     { kind: 'any', label: '終日OK' },
@@ -142,6 +148,7 @@ export default function DayRequestSheet({
           <div className="min-w-0">
             <h2 id="day-request-sheet-title" className="text-xl font-bold text-slate-900">{title}</h2>
             {subtitle && <p className="mt-0.5 text-sm text-slate-600">{subtitle}</p>}
+            {usualLabel && <p className="mt-0.5 text-sm text-slate-500">いつも：{usualLabel}</p>}
           </div>
           <button ref={closeButtonRef} type="button" onClick={() => onClose(currentMemo)} aria-label="閉じる"
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
@@ -193,13 +200,16 @@ export default function DayRequestSheet({
             <p className="text-base font-bold text-slate-900">{timeStep.heading}</p>
             <TimeGrid from={timeStep.from} to={timeStep.to} picked={timeStep.picked} minimum={timeStep.minimum} onPick={pickTime} />
           </div>
-            <div className="grid shrink-0 grid-cols-[1fr_2fr] gap-2 border-t border-slate-200 bg-white px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+            {choiceNote && <p role="status" className="mb-2 text-[13px] font-medium leading-snug text-slate-600">{choiceNote}</p>}
+            <div className="grid grid-cols-[1fr_2fr] gap-2">
               <button type="button" onClick={() => setStep(step === 'rangeEnd' ? 'rangeStart' : 'choose')}
                 className="min-h-12 rounded-md border border-slate-300 bg-white px-3 text-[15px] font-bold text-slate-700 hover:bg-slate-50">戻る</button>
               <button type="button" onClick={confirm} disabled={!isComplete(draft)}
                 className="min-h-14 rounded-md bg-[var(--primary)] px-3 text-[17px] font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300 disabled:text-slate-500">
                 {isComplete(draft) ? `${currentLabel} で決定` : '時間を選んでください'}
               </button>
+            </div>
             </div>
           </>
         )}

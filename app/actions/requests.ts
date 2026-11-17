@@ -10,7 +10,8 @@ import {
   requestSpan,
   toDayRequest,
 } from '@/lib/day-request'
-import { UserFacingError, check, runAction, toRows } from '@/lib/server/action'
+import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
+import { type UsualAvailability, usualAvailabilityOf } from '@/lib/usual-availability'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { requireSession } from '@/lib/server/dal'
 import { CLEARED_ANALYSIS, type ExistingDayRequest, planMonthRequestSave } from '@/lib/server/request-save-plan'
@@ -47,6 +48,8 @@ export type RequestsPageData = {
   requests: StoreDayRequestView[]
   /** The logged-in staff member's own requests (calendar editor). */
   mine: DayRequestView[]
+  /** The logged-in staff member's usual availability, shown faintly on days without a request. */
+  usual: UsualAvailability
   hours: BusinessHours
 }
 
@@ -60,14 +63,17 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
     const session = await requireSession(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
-    const [staffResult, requestResult, hours] = await Promise.all([
+    const [staffResult, requestResult, hours, meResult] = await Promise.all([
       db.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name'),
       db.from('shift_requests').select(REQUEST_COLUMNS)
         .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
       getBusinessHours(storeId),
+      db.from('staff').select('weekly_availability, work_start_1, work_end_1, work_start_2, work_end_2')
+        .eq('id', session.id).eq('store_id', storeId).maybeSingle(),
     ])
     check(staffResult.error)
     check(requestResult.error)
+    check(meResult.error)
     const requests = toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) }))
     return {
       month: monthStart,
@@ -79,6 +85,7 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
       requests,
       mine: requests.filter(request => request.staff_id === session.id)
         .map(request => ({ date: request.date, memo: request.memo, request: request.request })),
+      usual: usualAvailabilityOf(toRow(meResult.data)),
       hours,
     }
   })
