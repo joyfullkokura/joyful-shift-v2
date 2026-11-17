@@ -38,6 +38,12 @@ export default function UsualAvailabilityCard({ profile, hasPendingRequest, pend
 
   const changes = draft ? changedWeekdays(baseline, draft) : []
   const complete = draft ? completeWeeklyAvailability(draft) : null
+  // No weekday choices yet (nothing set, or two old time bands): every weekday has to be chosen.
+  const needsEveryDay = WEEKDAY_KEYS.some(day => !baseline[day])
+  const remainingDays = draft ? WEEKDAY_KEYS.filter(day => !draft[day]).length : 0
+  const footerNote = needsEveryDay && remainingDays > 0
+    ? `あと${remainingDays}曜日`
+    : changes.length > 0 ? `${changes.length}曜日を変更` : '変更はまだありません'
   const send = async () => {
     if (!complete || changes.length === 0) return
     setIsSending(true)
@@ -109,14 +115,23 @@ export default function UsualAvailabilityCard({ profile, hasPendingRequest, pend
             className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col rounded-md border border-slate-200 bg-white shadow-2xl">
             <div className="shrink-0 border-b border-slate-200 px-5 py-4">
               <h2 id="usual-availability-dialog-title" className="text-base font-bold text-slate-900">いつもの出勤できる時間の変更を申請</h2>
-              <p className="mt-1 text-xs text-slate-500">変える曜日だけ選び直してください。店長が承認すると反映されます。</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {needsEveryDay
+                  ? '曜日ごとの時間がまだ設定されていないため、すべての曜日を選んでください。店長が承認すると反映されます。'
+                  : '変える曜日だけ選び直してください。店長が承認すると反映されます。'}
+              </p>
+              {needsEveryDay && (
+                <p role="status" className="mt-1 text-xs font-bold text-slate-700">
+                  {remainingDays > 0 ? `未設定の曜日があと${remainingDays}つあります。` : 'すべての曜日を選びました。'}
+                </p>
+              )}
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
               <WeeklyAvailabilityEditor value={draft} onChange={setDraft} hours={hours} disabled={isSending} baseline={baseline} />
               {error && <p role="alert" className="mt-3 text-sm font-bold text-red-700">{error}</p>}
             </div>
             <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
-              <span className="mr-auto text-xs font-medium text-slate-500">{changes.length > 0 ? `${changes.length}曜日を変更` : '変更はまだありません'}</span>
+              <span className="mr-auto text-xs font-medium text-slate-500">{footerNote}</span>
               <button type="button" onClick={() => setDraft(null)} disabled={isSending}
                 className="min-h-11 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">キャンセル</button>
               <button type="button" onClick={() => void send()} disabled={isSending || !complete || changes.length === 0}
