@@ -19,6 +19,7 @@ import { saveAs } from 'file-saver'
 import { useAdmin } from '@/context/AdminContext'
 import { useFlash } from '@/components/FlashMessage'
 import DayRequestSheet from '@/components/DayRequestSheet'
+import { useUnsavedChanges } from '@/lib/client/app-version'
 import { CalendarSkeleton, LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
 import { type UsualAvailability, isSameAsUsual, usualAvailabilityOf, usualOnDate } from '@/lib/usual-availability'
 import { type DayEntry, applyDayChoice, toRequestPayload } from '@/lib/request-entries'
@@ -103,6 +104,9 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   const [usual, setUsual] = useState<UsualAvailability>(() => initial?.usual ?? usualAvailabilityOf(null))
   /** One line under the calendar after a one-tap choice (休み / 終日OK) that differs from usual. */
   const [statusNote, setStatusNote] = useState('')
+  /** Edits not submitted yet (the reload banner warns about them). */
+  const [isDirty, setIsDirty] = useState(false)
+  useUnsavedChanges('requests', isDirty)
   const [isMultiSelect, setIsMultiSelect] = useState(false)
   const [selectedDates, setSelectedDates] = useState<string[]>([])
   const [sheet, setSheet] = useState<SheetTarget | null>(null)
@@ -155,6 +159,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       setHours(result.data.hours)
       setUsual(result.data.usual)
       setEntries(toEntries(result.data.mine))
+      setIsDirty(false)
       setLoaded({ key: loadKey, month: currentMonthStart, status: 'ready' })
     })
     return () => { cancelled = true }
@@ -194,6 +199,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   // The same as usual is no request at all: only days that differ are saved (lib/request-entries.ts).
   const applyToDates = (dates: string[], request: DayRequest | null, memo: string | undefined) => {
     setEntries(previous => applyDayChoice(previous, dates, request, memo, usual))
+    setIsDirty(true)
   }
 
   const handleSheetApply = (request: DayRequest | null, memo: string | undefined) => {
@@ -210,6 +216,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   const handleSheetClose = (memo: string | undefined) => {
     if (sheet && sheet.dates.length === 1 && memo !== undefined) {
       const date = sheet.dates[0]
+      if ((entries[date]?.memo ?? '') !== memo) setIsDirty(true)
       setEntries(previous => {
         const existing = previous[date]
         if ((existing?.memo ?? '') === memo) return previous
@@ -233,6 +240,7 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       const payload: DayRequestInput[] = toRequestPayload(entries)
       unwrap(await saveMyMonthRequests(storeId, startOfMonth, payload))
       notify(`${targetMonth}月の希望を提出しました。`)
+      setIsDirty(false)
       setReloadKey(key => key + 1)
     } catch (error) {
       notify('保存できませんでした: ' + (error instanceof Error ? error.message : '通信エラー'), 'error')

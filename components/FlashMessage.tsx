@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, startTransition, type ReactNode } from 'react'
 import { CheckCircle2, CircleAlert, Info, X } from 'lucide-react'
+import { requestVersionCheck } from '@/lib/client/app-version'
 
 export type FlashTone = 'success' | 'error' | 'info'
 type Flash = { id: number; message: string; tone: FlashTone }
@@ -55,6 +56,8 @@ export function FlashProvider({ storeId, children }: { storeId: string; children
 
   const notify = useCallback((message: string, tone: FlashTone = 'success') => {
     setFlash({ id: Date.now(), message, tone })
+    // A failure may come from a screen older than the deployment (its Server Actions are gone).
+    if (tone === 'error') requestVersionCheck()
   }, [])
   const dismiss = useCallback(() => setFlash(null), [])
 
