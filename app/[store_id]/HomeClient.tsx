@@ -34,7 +34,9 @@ import {
 import { unwrap } from '@/lib/action-result'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
-import { formatWeeklyAvailability, type WeeklyAvailability } from '@/lib/weekly-availability'
+import { WEEKDAY_KEYS, WEEKDAY_LABELS, formatWeeklyAvailability, type WeeklyAvailability } from '@/lib/weekly-availability'
+import { changedWeekdays, usualAsWeeklyDraft, usualAvailabilityOf, type UsualAvailabilityInput } from '@/lib/usual-availability'
+import { formatDayRequest } from '@/lib/day-request'
 import UsualAvailabilityCard from '@/components/UsualAvailabilityCard'
 import { CardSkeleton, LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails, type ConditionChangeDetails } from '@/lib/staff-request-details'
@@ -475,6 +477,13 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
       {error && <p role="alert" className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
       {successMessage && <p role="status" className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{successMessage}</p>}
 
+      {isAdmin && pendingConditionRequests.length > 0 && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-300 bg-white px-4 py-3">
+          <p className="text-sm font-bold text-slate-900">承認待ちの条件変更 {pendingConditionRequests.length}件</p>
+          <a href="#condition-requests" className="inline-flex min-h-10 items-center rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50">確認する</a>
+        </div>
+      )}
+
       {isAdmin && pinResetRequests.length > 0 && (
         <section className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle size={17} className="text-amber-700" />暗証番号リセット申請</div>
@@ -535,7 +544,7 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
       )}
 
       {isAdmin && pendingConditionRequests.length > 0 && (
-        <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+        <section id="condition-requests" className="mb-5 scroll-mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><FileCheck2 size={17} className="text-slate-500" />勤務条件の変更申請</div>
           <div className="mt-3 space-y-2">
             {pendingConditionRequests.map(request => {
@@ -553,7 +562,7 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
                         {details.main_job !== undefined && <p>メイン職種: {staff?.main_job || '未設定'} → {details.main_job}</p>}
                         {details.skills && <p>習得スキル: {details.skills.length > 0 ? details.skills.join('、') : '登録なし'}</p>}
                         {details.available_hours !== undefined && <p>基本出勤可能時間: {details.available_hours ? `${details.available_hours.start}〜${details.available_hours.end}` : '登録なし'}</p>}
-                        {details.weekly_availability && <p>出勤できる時間: {formatWeeklyAvailability(staff?.weekly_availability) ?? '未設定'} → {formatWeeklyAvailability(details.weekly_availability)}</p>}
+                        {details.weekly_availability && <WeeklyChangeDiff staff={staff ?? null} requested={details.weekly_availability} />}
                         {details.memo !== undefined && <p className="whitespace-pre-wrap">店長へのメモ: {staff?.memo || '未設定'} → {details.memo || '未設定'}</p>}
                       </div>
                     </div>
@@ -790,5 +799,24 @@ export function HomeSkeleton() {
         <CardSkeleton lines={4} />
       </div>
     </SkeletonRegion>
+  )
+}
+
+/** Approval list: each weekday before → after; changed weekdays in bold. */
+function WeeklyChangeDiff({ staff, requested }: { staff: UsualAvailabilityInput | null; requested: WeeklyAvailability }) {
+  const usual = usualAvailabilityOf(staff)
+  const changed = new Set(changedWeekdays(usualAsWeeklyDraft(usual), requested))
+  return (
+    <div>
+      <p>出勤できる時間（曜日ごと）{usual.source === 'bands' ? '：以前の時間帯から' : ''}</p>
+      <dl className="mt-1 grid gap-y-0.5">
+        {WEEKDAY_KEYS.map(day => (
+          <div key={day} className={`flex flex-wrap gap-x-2 ${changed.has(day) ? 'font-bold text-slate-900' : 'text-slate-500'}`}>
+            <dt className="w-5 shrink-0">{WEEKDAY_LABELS[day]}</dt>
+            <dd className="tabular-nums">{usual.days[day].long || '未設定'} → {formatDayRequest(requested[day], 'long', '出られない')}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }
