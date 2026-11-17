@@ -7,21 +7,25 @@ import { hasUnsavedChanges, onUnsavedChangesChange, onVersionCheckRequest } from
 const CHECK_INTERVAL_MS = 10 * 60 * 1000
 const MIN_GAP_MS = 30 * 1000
 
-/** This page's deployment, as rendered by Next.js on <html data-dpl-id>. */
-const loadedDeploymentId = () => (typeof document === 'undefined' ? undefined : document.documentElement.dataset.dplId)
-
 /**
  * Tells a screen that was left open across a deployment to reload.
  * Checks /api/version when the tab becomes visible again, every 10 minutes,
  * and right after a failure (requestVersionCheck). Never reloads by itself:
  * the person decides, and is warned when the screen has unsaved edits.
  */
-export default function VersionWatcher() {
+export default function VersionWatcher({ deploymentId }: {
+  /**
+   * The deployment that rendered this page, passed by the server layout.
+   * (Next.js puts it on <html data-dpl-id> in the HTML, but hydration removes
+   * that attribute, so the DOM cannot be relied on.) Undefined locally: no checks.
+   */
+  deploymentId?: string
+}) {
   const [isOutdated, setIsOutdated] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
 
   useEffect(() => {
-    const loaded = loadedDeploymentId()
+    const loaded = deploymentId
     if (!loaded) return // local development: no deployment id, nothing to compare
     let lastCheck = 0
     let stopped = false
@@ -57,7 +61,7 @@ export default function VersionWatcher() {
       stopListening()
       window.removeEventListener('unhandledrejection', onRejection)
     }
-  }, [])
+  }, [deploymentId])
 
   useEffect(() => onUnsavedChangesChange(() => setIsDirty(hasUnsavedChanges())), [])
 

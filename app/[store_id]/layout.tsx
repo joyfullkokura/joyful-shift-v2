@@ -3,6 +3,7 @@ import { AdminProvider } from '@/context/AdminContext'
 import StoreShell from '@/components/StoreShell'
 import { FlashProvider } from '@/components/FlashMessage'
 import VersionWatcher from '@/components/VersionWatcher'
+import { currentDeploymentId } from '@/lib/deployment'
 import type { LoginMember, SessionStaff } from '@/lib/auth-types'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
@@ -43,7 +44,7 @@ export default async function StoreLayout({ children, params }: { children: Reac
     // Remount when the server-side session changes (login, logout, PIN change).
     <AdminProvider key={session?.id ?? 'guest'} storeId={storeId} initialStaff={session}>
       <FlashProvider storeId={storeId}>
-        <VersionWatcher />
+        <VersionWatcher deploymentId={currentDeploymentId()} />
         <StoreShell storeId={storeId} storeName={storeName} members={members} hours={hours} initialHasUnread={hasUnreadNotifications} loadError={loadError}>
           {children}
         </StoreShell>
