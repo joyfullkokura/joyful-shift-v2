@@ -12,6 +12,7 @@ import {
   type WeeklyAvailabilityDraft,
 } from '@/lib/weekly-availability'
 import WeeklyAvailabilityEditor from '@/components/WeeklyAvailabilityEditor'
+import { useUnsavedChanges } from '@/lib/client/app-version'
 import { useParams } from 'next/navigation'
 import { useAdmin } from '@/context/AdminContext'
 import type { DataRow } from '@/lib/action-result'
@@ -86,6 +87,9 @@ export default function StaffPage() {
   const [hours, setHours] = useState<BusinessHours>(DEFAULT_BUSINESS_HOURS)
   const [weeklyTarget, setWeeklyTarget] = useState<{ id: string; name: string; draft: WeeklyAvailabilityDraft } | null>(null)
   const [isWeeklySaving, setIsWeeklySaving] = useState(false)
+  /** Roster edits not yet saved with 「全員の変更を一括保存」 (the reload banner warns about them). */
+  const [hasRosterEdits, setHasRosterEdits] = useState(false)
+  useUnsavedChanges('staff', hasRosterEdits)
   const { notify } = useFlash()
 
   // --- 1. データ読み込み（スタッフ名簿 ＋ 店舗のスキル設定） ---
@@ -100,6 +104,7 @@ export default function StaffPage() {
         return
       }
       setStaff(result.data.staff.map(toRosterStaff))
+      setHasRosterEdits(false)
       setSkillOptions(parseSkillOptions(result.data.skillOptions))
       setHours(result.data.hours)
     }
@@ -123,9 +128,11 @@ export default function StaffPage() {
   // --- 3. 編集用ヘルパー関数 ---
   const handleUpdateField = <K extends EditableField>(id: string, field: K, value: RosterStaff[K]) => {
     setStaff(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p))
+    setHasRosterEdits(true)
   }
 
   const handleToggleSkill = (personId: string, skillName: string) => {
+    setHasRosterEdits(true)
     setStaff(prev => prev.map(p => {
       if (p.id !== personId) return p
       let currentSkills = parseSkillOptions(p.skills)
@@ -143,7 +150,10 @@ export default function StaffPage() {
     // Only editable fields of this store's existing staff are written (checked on the server).
     const result = await saveStaffRoster(storeId, staff.map(toSavePayload))
     if (!result.ok) notify('保存できませんでした: ' + result.error, 'error')
-    else notify('すべての変更を保存しました。')
+    else {
+      notify('すべての変更を保存しました。')
+      setHasRosterEdits(false)
+    }
     setIsBulkSaving(false)
   }
 

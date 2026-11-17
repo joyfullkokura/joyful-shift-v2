@@ -19,6 +19,7 @@ import ShiftTimeEditor from '@/components/ShiftTimeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DayRequestSheet from '@/components/DayRequestSheet'
 import GenerateSkeleton from './GenerateSkeleton'
+import { useUnsavedChanges } from '@/lib/client/app-version'
 import { useFlash } from '@/components/FlashMessage'
 import {
   actualHoursForShifts,
@@ -142,6 +143,9 @@ export default function GeneratePage() {
   const [slots, setSlots] = useState<Record<string, Record<string, { start: number, end: number }>>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [generatedSchedule, setGeneratedSchedule] = useState<GeneratedSchedule | null>(null)
+  /** The schedule as last loaded or saved; any other schedule on screen is unsaved (reload banner warns). */
+  const [savedSchedule, setSavedSchedule] = useState<GeneratedSchedule | null>(null)
+  useUnsavedChanges('generate', generatedSchedule !== null && generatedSchedule !== savedSchedule)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState('')
@@ -207,6 +211,7 @@ export default function GeneratePage() {
       const storedSchedule = (draftRow.schedule_data ?? draftRow.schedule ?? draftRow.shifts) as GeneratedSchedule | undefined
       if (storedSchedule && Array.isArray(storedSchedule.staff) && Array.isArray(storedSchedule.alerts)) {
         setGeneratedSchedule(storedSchedule)
+        setSavedSchedule(storedSchedule)
         setIsDraftEdit(true)
         return
       }
@@ -407,6 +412,7 @@ export default function GeneratePage() {
         alerts: currentScheduleAlerts,
         vacancyCount: currentVacancyCount,
       }))
+      setSavedSchedule(generatedSchedule)
       setIsDraftEdit(true)
       setDraftNotice('下書きを保存しました')
       setDraftError('')
@@ -465,6 +471,7 @@ export default function GeneratePage() {
         alerts: currentScheduleAlerts,
         vacancyCount: currentVacancyCount,
       }))
+      setSavedSchedule(generatedSchedule)
       setDraftNotice('下書きを保存しました')
     } catch (error) {
       setDraftError(`下書きを保存できませんでした: ${error instanceof Error ? error.message : '通信エラー'}`)
@@ -506,6 +513,7 @@ export default function GeneratePage() {
         alerts: currentScheduleAlerts,
         vacancyCount: currentVacancyCount,
       }))
+      setSavedSchedule(generatedSchedule)
       // The flash message lives in the store layout, so it stays visible after navigating.
       notify(`${targetMonth}月のシフトを確定・公開しました。`)
       router.push(`/${encodeURIComponent(currentStoreId)}/view`)
