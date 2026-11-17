@@ -34,8 +34,8 @@ import {
 import { unwrap } from '@/lib/action-result'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
-import { WEEKDAY_KEYS, WEEKDAY_LABELS, formatWeeklyAvailability, type WeeklyAvailability } from '@/lib/weekly-availability'
-import { changedWeekdays, usualAsWeeklyDraft, usualAvailabilityOf, type UsualAvailabilityInput } from '@/lib/usual-availability'
+import { WEEKDAY_KEYS, WEEKDAY_LABELS, formatWeeklyAvailability, type WeeklyAvailabilityChange } from '@/lib/weekly-availability'
+import { usualAvailabilityOf, type UsualAvailabilityInput } from '@/lib/usual-availability'
 import { formatDayRequest } from '@/lib/day-request'
 import UsualAvailabilityCard from '@/components/UsualAvailabilityCard'
 import { CardSkeleton, LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
@@ -437,8 +437,8 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
   const myPendingConditionDetails = myPendingConditionRequest ? getConditionChangeDetails(myPendingConditionRequest.details) : null
 
   /** Weekday times only; the manager's approval applies them. */
-  const submitUsualAvailabilityChange = async (weekly: WeeklyAvailability): Promise<string | null> => {
-    const result = await submitConditionChangeAction(storeId, { weekly_availability: weekly } satisfies ConditionChangeDetails)
+  const submitUsualAvailabilityChange = async (change: WeeklyAvailabilityChange): Promise<string | null> => {
+    const result = await submitConditionChangeAction(storeId, { weekly_availability: change } satisfies ConditionChangeDetails)
     if (!result.ok) return result.error
     setConditionRequests(current => [result.data as StaffRequestRecord, ...current])
     setSuccessMessage('いつもの出勤できる時間の変更を店長へ申請しました。')
@@ -802,18 +802,19 @@ export function HomeSkeleton() {
   )
 }
 
-/** Approval list: each weekday before → after; changed weekdays in bold. */
-function WeeklyChangeDiff({ staff, requested }: { staff: UsualAvailabilityInput | null; requested: WeeklyAvailability }) {
+/** Approval list: each weekday now → requested; only the requested weekdays are bold, the others stay as they are. */
+function WeeklyChangeDiff({ staff, requested }: { staff: UsualAvailabilityInput | null; requested: WeeklyAvailabilityChange }) {
   const usual = usualAvailabilityOf(staff)
-  const changed = new Set(changedWeekdays(usualAsWeeklyDraft(usual), requested))
   return (
     <div>
       <p>出勤できる時間（曜日ごと）{usual.source === 'bands' ? '：以前の時間帯から' : ''}</p>
       <dl className="mt-1 grid gap-y-0.5">
         {WEEKDAY_KEYS.map(day => (
-          <div key={day} className={`flex flex-wrap gap-x-2 ${changed.has(day) ? 'font-bold text-slate-900' : 'text-slate-500'}`}>
+          <div key={day} className={`flex flex-wrap gap-x-2 ${requested[day] ? 'font-bold text-slate-900' : 'text-slate-500'}`}>
             <dt className="w-5 shrink-0">{WEEKDAY_LABELS[day]}</dt>
-            <dd className="tabular-nums">{usual.days[day].long || '未設定'} → {formatDayRequest(requested[day], 'long', '出られない')}</dd>
+            <dd className="tabular-nums">
+              {usual.days[day].long || '未設定'}{requested[day] ? ` → ${formatDayRequest(requested[day], 'long', '出られない')}` : '（そのまま）'}
+            </dd>
           </div>
         ))}
       </dl>

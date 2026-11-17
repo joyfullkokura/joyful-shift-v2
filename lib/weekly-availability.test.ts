@@ -4,6 +4,8 @@ import {
   parseWeeklyAvailability,
   toParsedConditions,
   weekdayKeyOf,
+  applyWeeklyAvailabilityChange,
+  parseWeeklyAvailabilityChange,
   weeklyFromWorkRanges,
 } from '@/lib/weekly-availability'
 
@@ -56,5 +58,37 @@ describe('helpers', () => {
 
   it('formats one line', () => {
     expect(formatWeeklyAvailability(sample)).toBe('月 17:00〜 / 火 17:00〜 / 水 × / 木 〜15:00 / 金 10:00〜14:00 / 土 終日OK / 日 ×')
+  })
+})
+
+describe('weekday change requests', () => {
+  const evening = { kind: 'from', start: '18:00', end: null } as const
+
+  it('accepts some valid weekdays and refuses unknown keys, none and empty changes', () => {
+    expect(parseWeeklyAvailabilityChange({ monday: evening })).toEqual({ monday: evening })
+    expect(parseWeeklyAvailabilityChange({})).toBeNull()
+    expect(parseWeeklyAvailabilityChange({ funday: evening })).toBeNull()
+    expect(parseWeeklyAvailabilityChange({ monday: { kind: 'none', start: null, end: null } })).toBeNull()
+    expect(parseWeeklyAvailabilityChange({ monday: { kind: 'range', start: '14:00', end: '10:00' } })).toBeNull()
+    expect(parseWeeklyAvailabilityChange(null)).toBeNull()
+  })
+
+  it('lays the change over the current weekday choices (manager edits after the request survive)', () => {
+    const current = parseWeeklyAvailability(sample)!
+    const editedByManager = { ...current, sunday: { kind: 'any', start: null, end: null } }
+    const merged = applyWeeklyAvailabilityChange({ weekly_availability: editedByManager }, { monday: { kind: 'off', start: null, end: null } })
+    expect(merged?.monday).toEqual({ kind: 'off', start: null, end: null })
+    expect(merged?.sunday).toEqual({ kind: 'any', start: null, end: null })
+    expect(merged?.tuesday).toEqual(current.tuesday)
+  })
+
+  it('starts from the main old time band when no weekday choices exist', () => {
+    const merged = applyWeeklyAvailabilityChange({ work_start_1: '10:00:00', work_end_1: '14:00:00' }, { saturday: { kind: 'off', start: null, end: null } })
+    expect(merged?.monday).toEqual({ kind: 'range', start: '10:00', end: '14:00' })
+    expect(merged?.saturday).toEqual({ kind: 'off', start: null, end: null })
+  })
+
+  it('cannot complete a partial change for someone with no conditions at all', () => {
+    expect(applyWeeklyAvailabilityChange({}, { monday: evening })).toBeNull()
   })
 })

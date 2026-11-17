@@ -1,7 +1,7 @@
 // Parsers for staff_requests.details. Shared by the dashboard UI and the
 // server actions that apply approved requests, so both read them identically.
 
-import { type WeeklyAvailability, parseWeeklyAvailability } from '@/lib/weekly-availability'
+import { type WeeklyAvailability, type WeeklyAvailabilityChange, parseWeeklyAvailability, parseWeeklyAvailabilityChange } from '@/lib/weekly-availability'
 
 export type AvailableHours = {
   start: string
@@ -20,7 +20,8 @@ export type ConditionChangeDetails = {
   skills?: string[]
   /** Older requests only (one time band). */
   available_hours?: AvailableHours | null
-  weekly_availability?: WeeklyAvailability
+  /** Only the weekdays to change; laid over the current choices on approval. */
+  weekly_availability?: WeeklyAvailabilityChange
 }
 
 export type NewStaffRegistrationDetails = {
@@ -69,7 +70,7 @@ export const getConditionChangeDetails = (value: unknown): ConditionChangeDetail
     else return null
   }
   if (value.weekly_availability !== undefined) {
-    const parsedWeekly = parseWeeklyAvailability(value.weekly_availability)
+    const parsedWeekly = parseWeeklyAvailabilityChange(value.weekly_availability)
     if (!parsedWeekly) return null
     result.weekly_availability = parsedWeekly
   }

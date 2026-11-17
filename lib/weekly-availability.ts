@@ -75,3 +75,53 @@ export const formatWeeklyAvailability = (value: unknown): string | null => {
   if (!weekly) return null
   return WEEKDAY_KEYS.map(day => `${WEEKDAY_LABELS[day]} ${weekly[day].kind === 'off' ? '×' : formatDayRequest(weekly[day])}`).join(' / ')
 }
+
+/** Some weekdays (at least one), each valid; used by change requests that carry only the changed days. */
+export type WeeklyAvailabilityChange = Partial<WeeklyAvailability>
+
+/** Validates a change: an object of 1-7 known weekdays, each a valid choice. Unknown keys are refused. */
+export const parseWeeklyAvailabilityChange = (value: unknown): WeeklyAvailabilityChange | null => {
+  if (!isRecord(value)) return null
+  const keys = Object.keys(value)
+  if (keys.length === 0 || keys.some(key => !(WEEKDAY_KEYS as readonly string[]).includes(key))) return null
+  const result: WeeklyAvailabilityChange = {}
+  for (const day of keys as WeekdayKey[]) {
+    const entry = value[day]
+    if (!isRecord(entry)) return null
+    const request = toDayRequest(entry.kind, entry.start, entry.end)
+    if (!request || request.kind === 'none') return null
+    result[day] = request
+  }
+  return result
+}
+
+/**
+ * Current weekday choices of a staff member: weekly_availability when set,
+ * otherwise the main old time band (band 1, or band 2 when it is the only one)
+ * on every day, otherwise nothing. With two bands only band 1 is used: band 2
+ * meant "only if nobody else" and cannot be part of one weekday choice.
+ */
+export const currentWeeklyOf = (staff: StaffWeeklySource | null | undefined): WeeklyAvailabilityDraft => {
+  const weekly = parseWeeklyAvailability(staff?.weekly_availability)
+  if (weekly) return weekly
+  const band1 = weeklyFromWorkRanges(staff?.work_start_1, staff?.work_end_1)
+  return Object.keys(band1).length > 0 ? band1 : weeklyFromWorkRanges(staff?.work_start_2, staff?.work_end_2)
+}
+
+export type StaffWeeklySource = {
+  weekly_availability?: unknown
+  work_start_1?: unknown
+  work_end_1?: unknown
+  work_start_2?: unknown
+  work_end_2?: unknown
+}
+
+/**
+ * Approval of a weekday change: the requested days laid over the staff
+ * member's choices as they are now (so edits made by the manager after the
+ * request was sent survive). Null when some weekday would still be unknown.
+ */
+export const applyWeeklyAvailabilityChange = (
+  staff: StaffWeeklySource | null | undefined,
+  change: WeeklyAvailabilityChange,
+): WeeklyAvailability | null => completeWeeklyAvailability({ ...currentWeeklyOf(staff), ...change })

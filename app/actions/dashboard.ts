@@ -5,6 +5,7 @@ import { getConditionChangeDetails, getNewStaffRegistrationDetails } from '@/lib
 import { JOB_OPTIONS, MAX_MEMO_LENGTH, WEEKLY_DAY_OPTIONS } from '@/lib/staff-profile-options'
 import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
 import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
+import { applyWeeklyAvailabilityChange } from '@/lib/weekly-availability'
 import { type BusinessHours, businessHoursOf } from '@/lib/day-request'
 import { requireAdmin, requireSession } from '@/lib/server/dal'
 import { getAdminClient } from '@/lib/server/supabase-admin'
@@ -211,6 +212,18 @@ export async function resolveConditionRequest(storeId: string, requestId: string
     if (approved) {
       const details = getConditionChangeDetails(request.details)
       if (!details) throw new UserFacingError('申請内容を読み込めませんでした。')
+      // Weekday times: the requested days over the person's choices as they are now,
+      // so changes the manager made in the roster after the request was sent are kept.
+      let weeklyColumns = {}
+      if (details.weekly_availability) {
+        const { data: current, error: currentError } = await db.from('staff')
+          .select('weekly_availability, work_start_1, work_end_1, work_start_2, work_end_2')
+          .eq('id', staffId).eq('store_id', storeId).maybeSingle()
+        check(currentError)
+        const merged = applyWeeklyAvailabilityChange(toRow(current), details.weekly_availability)
+        if (!merged) throw new UserFacingError('曜日ごとの時間がそろわないため承認できません。名簿で曜日ごとの時間を設定してから承認してください。')
+        weeklyColumns = weeklyAvailabilityColumns(merged, await getStoreBusinessHours(storeId))
+      }
       // Only the fields the request contains are changed.
       staffUpdate = {
         ...(details.weekly_target_days !== undefined ? { weekly_target_days: details.weekly_target_days } : {}),
@@ -221,9 +234,7 @@ export async function resolveConditionRequest(storeId: string, requestId: string
           work_start_1: details.available_hours?.start || null,
           work_end_1: details.available_hours?.end || null,
         } : {}),
-        ...(details.weekly_availability
-          ? weeklyAvailabilityColumns(details.weekly_availability, await getStoreBusinessHours(storeId))
-          : {}),
+        ...weeklyColumns,
       }
       const { error } = await db.from('staff').update(staffUpdate).eq('id', staffId).eq('store_id', storeId)
       check(error)

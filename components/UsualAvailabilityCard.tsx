@@ -9,7 +9,7 @@ import {
   WEEKDAY_LABELS,
   completeWeeklyAvailability,
   type WeekdayKey,
-  type WeeklyAvailability,
+  type WeeklyAvailabilityChange,
   type WeeklyAvailabilityDraft,
 } from '@/lib/weekly-availability'
 import { formatDayRequest } from '@/lib/day-request'
@@ -24,11 +24,11 @@ export default function UsualAvailabilityCard({ profile, hasPendingRequest, pend
   profile: UsualAvailabilityInput
   /** Any condition change of this person is waiting for the manager. */
   hasPendingRequest: boolean
-  /** The weekday times in that pending request, if it contains them. */
-  pendingWeekly: WeeklyAvailability | null
+  /** The weekdays in that pending request, if it contains any. */
+  pendingWeekly: WeeklyAvailabilityChange | null
   hours: BusinessHours
-  /** Sends the request; resolves to an error message, or null when sent. */
-  onSubmit: (weekly: WeeklyAvailability) => Promise<string | null>
+  /** Sends only the changed weekdays; resolves to an error message, or null when sent. */
+  onSubmit: (change: WeeklyAvailabilityChange) => Promise<string | null>
 }) {
   const usual = usualAvailabilityOf(profile)
   const baseline = usualAsWeeklyDraft(usual)
@@ -38,13 +38,13 @@ export default function UsualAvailabilityCard({ profile, hasPendingRequest, pend
 
   const changes = draft ? changedWeekdays(baseline, draft) : []
   const complete = draft ? completeWeeklyAvailability(draft) : null
-  const pendingChanges = new Set(pendingWeekly ? changedWeekdays(baseline, pendingWeekly) : [])
-
   const send = async () => {
     if (!complete || changes.length === 0) return
     setIsSending(true)
     setError('')
-    const message = await onSubmit(complete)
+    // Only the weekdays that differ; the approval lays them over the choices as they are then.
+    const change: WeeklyAvailabilityChange = Object.fromEntries(changes.map(day => [day, complete[day]]))
+    const message = await onSubmit(change)
     setIsSending(false)
     if (message) setError(message)
     else setDraft(null)
@@ -87,14 +87,17 @@ export default function UsualAvailabilityCard({ profile, hasPendingRequest, pend
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-bold text-slate-700">申請中の内容</p>
           <dl className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
-            {WEEKDAY_KEYS.map(day => (
-              <div key={day} className="flex items-baseline gap-3 text-sm">
-                <dt className={`w-5 shrink-0 font-bold ${dayColor(day)}`}>{WEEKDAY_LABELS[day]}</dt>
-                <dd className={`tabular-nums ${pendingChanges.has(day) ? 'font-bold text-slate-900' : 'text-slate-500'}`}>
-                  {formatDayRequest(pendingWeekly[day], 'long', '出られない')}
-                </dd>
-              </div>
-            ))}
+            {WEEKDAY_KEYS.map(day => {
+              const requested = pendingWeekly[day]
+              return (
+                <div key={day} className="flex items-baseline gap-3 text-sm">
+                  <dt className={`w-5 shrink-0 font-bold ${dayColor(day)}`}>{WEEKDAY_LABELS[day]}</dt>
+                  <dd className={`tabular-nums ${requested ? 'font-bold text-slate-900' : 'text-slate-500'}`}>
+                    {requested ? formatDayRequest(requested, 'long', '出られない') : 'そのまま'}
+                  </dd>
+                </div>
+              )
+            })}
           </dl>
         </div>
       )}

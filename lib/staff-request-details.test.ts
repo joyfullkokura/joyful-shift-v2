@@ -30,6 +30,13 @@ describe('getConditionChangeDetails', () => {
     expect(getConditionChangeDetails({ main_job: 'ホール', memo: '' })).toEqual({ main_job: 'ホール', memo: '' })
   })
 
+  it('accepts only some weekdays (the changed ones) and refuses unknown weekday keys', () => {
+    const evening = { kind: 'from', start: '18:00', end: null }
+    expect(getConditionChangeDetails({ weekly_availability: { tuesday: evening } })).toEqual({ weekly_availability: { tuesday: evening } })
+    expect(getConditionChangeDetails({ weekly_availability: { tuesday: evening, holiday: evening } })).toBeNull()
+    expect(getConditionChangeDetails({ weekly_availability: {} })).toBeNull()
+  })
+
   it('rejects wrong types, invalid weekday choices, empty requests and non-objects', () => {
     expect(getConditionChangeDetails({ weekly_target_days: '3' })).toBeNull()
     expect(getConditionChangeDetails({ main_job: 1 })).toBeNull()
