@@ -8,6 +8,8 @@ import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/b
 import { applyWeeklyAvailabilityChange } from '@/lib/weekly-availability'
 import { type BusinessHours, businessHoursOf } from '@/lib/day-request'
 import { requireAdmin, requireSession } from '@/lib/server/dal'
+import { loadStaffRank } from '@/lib/server/staff-order'
+import type { StaffRank } from '@/lib/staff-order'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { clearFailures, staffThrottleKey } from '@/lib/server/throttle'
 import { assert, isDateKey, isId, isMonthStart, isShortText } from '@/lib/server/validation'
@@ -25,6 +27,8 @@ export type DashboardData = {
   conditionRequests: DataRow[]
   newStaffRequests: DataRow[]
   lockedStaff: LockedStaff[]
+  /** Current paper-form order (id → position) for the shift list. */
+  staffRank: StaffRank
 }
 
 /**
@@ -42,13 +46,14 @@ export async function getDashboard(storeId: string, targetMonth: string): Promis
     const conditionQuery = db.from('staff_requests').select(REQUEST_COLUMNS)
       .eq('store_id', storeId).eq('type', 'condition_change').order('created_at', { ascending: false })
 
-    const [storeResult, shiftResult, profilesResult, conditionResult] = await Promise.all([
+    const [storeResult, shiftResult, profilesResult, conditionResult, staffRank] = await Promise.all([
       db.from('stores').select('name, notice, skill_options, open_time, close_time').eq('store_id', storeId).maybeSingle(),
       db.from('monthly_shifts').select('schedule_data')
         .eq('store_id', storeId).eq('target_month', targetMonth).eq('status', 'confirmed')
         .order('created_at', { ascending: false }).limit(1),
       isAdmin ? profilesQuery : profilesQuery.eq('id', session.id),
       isAdmin ? conditionQuery : conditionQuery.eq('staff_id', session.id),
+      loadStaffRank(storeId),
     ])
     check(storeResult.error)
     check(shiftResult.error)
@@ -101,6 +106,7 @@ export async function getDashboard(storeId: string, targetMonth: string): Promis
       conditionRequests: toRows(conditionResult.data),
       newStaffRequests,
       lockedStaff,
+      staffRank,
     }
   })
 }

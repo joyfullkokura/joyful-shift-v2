@@ -40,6 +40,7 @@ import { formatDayRequest } from '@/lib/day-request'
 import UsualAvailabilityCard from '@/components/UsualAvailabilityCard'
 import { CardSkeleton, LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails, type ConditionChangeDetails } from '@/lib/staff-request-details'
+import { type StaffRank, sortByRank } from '@/lib/staff-order'
 
 type SchedulePerson = {
   id: string
@@ -174,6 +175,8 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
   const [draftNotice, setDraftNotice] = useState(() => storeOf(initialDashboard)?.notice || '')
   const [storeName, setStoreName] = useState(() => storeOf(initialDashboard)?.name || '')
   const [schedule, setSchedule] = useState<ScheduleData | null>(() => isScheduleData(initialDashboard?.schedule) ? initialDashboard.schedule : null)
+  /** Current paper-form order (id → position) for the shift list. */
+  const [staffRank, setStaffRank] = useState<StaffRank>(() => initialDashboard?.staffRank ?? {})
   const [selectedDate, setSelectedDate] = useState(() => initial ? dateFromKey(initial.dateKey) : startOfLocalDay(new Date()))
   const [isSavingNotice, setIsSavingNotice] = useState(false)
   const [pinResetRequests, setPinResetRequests] = useState<PinResetRequest[]>(() => (initialDashboard?.pinResetRequests ?? []) as PinResetRequest[])
@@ -224,6 +227,7 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
         setNotice(store?.notice || NO_NOTICE)
         setDraftNotice(store?.notice || '')
         setSchedule(isScheduleData(dashboard.schedule) ? dashboard.schedule : null)
+        setStaffRank(dashboard.staffRank)
         setPinResetRequests(dashboard.pinResetRequests as PinResetRequest[])
         setStaffProfiles(dashboard.staffProfiles as StaffProfile[])
         setConditionRequests(dashboard.conditionRequests as StaffRequestRecord[])
@@ -266,7 +270,7 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
     return () => { isCurrent = false }
   }, [currentStaff?.id, dayOffKey, loadedDayOffKey, selectedDateKey, storeId])
 
-  const schedulePeople = useMemo(() => schedule?.staff || [], [schedule])
+  const schedulePeople = useMemo(() => sortByRank(schedule?.staff || [], staffRank), [schedule, staffRank])
   const todayPerson = schedulePeople.find(person => person.id === currentStaff?.id)
   const selectedShift = todayPerson?.shifts?.[selectedDateKey] || ''
   const isSelectedDateToday = selectedDateKey === todayKey

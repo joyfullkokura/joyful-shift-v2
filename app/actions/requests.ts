@@ -12,6 +12,7 @@ import {
 } from '@/lib/day-request'
 import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/action'
 import { type UsualAvailability, usualAvailabilityOf } from '@/lib/usual-availability'
+import { type StaffCategory, isStaffCategory, sortStaff } from '@/lib/staff-order'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { requireSession } from '@/lib/server/dal'
 import { CLEARED_ANALYSIS, type ExistingDayRequest, planMonthRequestSave } from '@/lib/server/request-save-plan'
@@ -29,7 +30,7 @@ const REQUEST_COLUMNS = 'staff_id, date, is_off, memo, request_kind, start_time,
 export type DayRequestView = { date: string; memo: string; request: DayRequest | null }
 export type StoreDayRequestView = DayRequestView & { staff_id: string }
 
-export type RequestStaff = { id: string; name: string; is_employee: boolean }
+export type RequestStaff = { id: string; name: string; is_employee: boolean; category: StaffCategory | null; display_order: number | null }
 
 const getBusinessHours = getStoreBusinessHours
 
@@ -64,7 +65,7 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
     const [staffResult, requestResult, hours, meResult] = await Promise.all([
-      db.from('staff').select('id, name, is_employee').eq('store_id', storeId).order('name'),
+      db.from('staff').select('id, name, is_employee, category, display_order').eq('store_id', storeId),
       db.from('shift_requests').select(REQUEST_COLUMNS)
         .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
       getBusinessHours(storeId),
@@ -77,11 +78,13 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
     const requests = toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) }))
     return {
       month: monthStart,
-      staff: toRows(staffResult.data).map(row => ({
+      staff: sortStaff(toRows(staffResult.data).map(row => ({
         id: String(row.id),
         name: typeof row.name === 'string' ? row.name : '',
         is_employee: row.is_employee === true,
-      })),
+        category: isStaffCategory(row.category) ? row.category : null,
+        display_order: typeof row.display_order === 'number' ? row.display_order : null,
+      }))),
       requests,
       mine: requests.filter(request => request.staff_id === session.id)
         .map(request => ({ date: request.date, memo: request.memo, request: request.request })),

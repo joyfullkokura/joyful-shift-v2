@@ -4,6 +4,7 @@ import type { LoginMember, SessionStaff } from '@/lib/auth-types'
 import { readSession } from '@/lib/server/session'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { parseWeeklyAvailability } from '@/lib/weekly-availability'
+import { compareStaffOrder } from '@/lib/staff-order'
 
 export class AuthorizationError extends Error {
   constructor(readonly reason: 'unauthenticated' | 'forbidden') {
@@ -80,7 +81,7 @@ export const listLoginMembers = async (storeId: string): Promise<LoginMember[]> 
   const [{ data, error }, pendingIds] = await Promise.all([
     getAdminClient()
       .from('staff')
-      .select('id, name, is_employee, pin_hash, weekly_target_days, main_job, work_start_1, work_end_1, work_start_2, work_end_2, memo, weekly_availability')
+      .select('id, name, is_employee, pin_hash, weekly_target_days, main_job, work_start_1, work_end_1, work_start_2, work_end_2, memo, weekly_availability, category, display_order')
       .eq('store_id', storeId),
     getPendingNewStaffIds(storeId),
   ])
@@ -88,9 +89,11 @@ export const listLoginMembers = async (storeId: string): Promise<LoginMember[]> 
 
   return toRows(data)
     .filter(row => !pendingIds.has(String(row.id)))
-    .sort((left, right) =>
-      Number(right.is_employee === true) - Number(left.is_employee === true) ||
-      (text(left.name) ?? '').localeCompare(text(right.name) ?? '', 'ja'))
+    // Paper-form order: category, display order, name.
+    .sort((left, right) => compareStaffOrder(
+      { id: String(left.id), name: text(left.name) ?? '', category: left.category, display_order: left.display_order },
+      { id: String(right.id), name: text(right.name) ?? '', category: right.category, display_order: right.display_order },
+    ))
     .map(row => {
       const hasPin = Boolean(text(row.pin_hash))
       return {

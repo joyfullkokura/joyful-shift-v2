@@ -23,6 +23,7 @@ import { useUnsavedChanges } from '@/lib/client/app-version'
 import { CalendarSkeleton, LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
 import { type UsualAvailability, isSameAsUsual, usualAvailabilityOf, usualOnDate } from '@/lib/usual-availability'
 import { type DayEntry, applyDayChoice, toRequestPayload } from '@/lib/request-entries'
+import { sortStaff } from '@/lib/staff-order'
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -75,8 +76,6 @@ const toColumnName = (index: number) => {
 
 type SheetTarget = { dates: string[] }
 
-const sortStaff = (staff: RequestStaff[]) => [...staff].sort((left, right) =>
-  Number(right.is_employee) - Number(left.is_employee) || left.name.localeCompare(right.name, 'ja'))
 
 const toEntries = (rows: RequestsPageData['mine']) => {
   const result: Record<string, DayEntry> = {}

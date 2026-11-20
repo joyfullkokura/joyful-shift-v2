@@ -8,6 +8,7 @@ import { unwrap } from '@/lib/action-result'
 import { getHolidayName } from '@/lib/holidays'
 import { useAdmin } from '@/context/AdminContext'
 import { LoadingNote, SkeletonRegion, TableSkeleton } from '@/components/Skeleton'
+import { sortByRank } from '@/lib/staff-order'
 
 type ShiftStaff = {
   id: string
@@ -89,13 +90,14 @@ export default function ViewShiftPage() {
       setIsLoading(true)
       setLoadError('')
       try {
-        const { storeName: loadedStoreName, shift } = unwrap(await getConfirmedSchedule(storeId, targetMonthStr))
+        const { storeName: loadedStoreName, shift, staffRank } = unwrap(await getConfirmedSchedule(storeId, targetMonthStr))
         const record = shift as ConfirmedShiftRow | null
         const savedSchedule = record?.schedule_data ?? record?.schedule ?? record?.shifts
         startTransition(() => {
           if (!isCurrent) return
           setStoreName(loadedStoreName || '')
-          setSchedule(isConfirmedSchedule(savedSchedule) ? savedSchedule : null)
+          // Rows in the current paper-form order (the saved order may be older).
+          setSchedule(isConfirmedSchedule(savedSchedule) ? { ...savedSchedule, staff: sortByRank(savedSchedule.staff, staffRank) } : null)
           setHighlightedStaffId(currentStaff?.id || '')
           setIsLoading(false)
         })

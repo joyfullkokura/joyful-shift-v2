@@ -21,11 +21,11 @@ import DayRequestSheet from '@/components/DayRequestSheet'
 import GenerateSkeleton from './GenerateSkeleton'
 import { useUnsavedChanges } from '@/lib/client/app-version'
 import { useFlash } from '@/components/FlashMessage'
+import { type StaffRank, sortByRank } from '@/lib/staff-order'
 import {
   actualHoursForShifts,
   calculateActualHours,
   calculateScheduleAlerts,
-  compareStaffOrder,
   fToT,
   generateSchedule,
   isMultiRoleStaff,
@@ -155,6 +155,8 @@ export default function GeneratePage() {
   const [draftError, setDraftError] = useState('')
   const [requestAnalysisWarning, setRequestAnalysisWarning] = useState('')
   const [requestReviews, setRequestReviews] = useState<RequestReview[]>([])
+  /** Paper-form order (id → position) for showing the schedule; generation itself keeps its own order. */
+  const [staffRank, setStaffRank] = useState<StaffRank>({})
   const [resolvedReviews, setResolvedReviews] = useState<Record<string, DayRequest>>({})
   const [reviewSheet, setReviewSheet] = useState<RequestReview | null>(null)
   const [reviewError, setReviewError] = useState('')
@@ -201,6 +203,7 @@ export default function GeneratePage() {
     const context = unwrap(await getGenerateContext(currentStoreId, targetMonthStr))
     // 要確認の要望 arrive with the context (one Server Action when the month opens).
     setRequestReviews(context.reviews)
+    setStaffRank(context.staffRank)
     setResolvedReviews({})
     setReviewError('')
     const sInfo = context.store ? toStoreInfo(context.store) : null
@@ -282,7 +285,7 @@ export default function GeneratePage() {
   )
   const currentVacancyCount = currentScheduleAlerts.filter(alert => alert.type === 'vacancy').length
   const sortedGeneratedStaff = generatedSchedule
-    ? [...generatedSchedule.staff].sort(compareStaffOrder)
+    ? sortByRank(generatedSchedule.staff, staffRank)
     : []
 
   useEffect(() => {

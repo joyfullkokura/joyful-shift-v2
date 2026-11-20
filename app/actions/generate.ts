@@ -4,6 +4,7 @@ import type { ActionResult, DataRow } from '@/lib/action-result'
 import { type DayRequest, type DayRequestKind, businessHoursOf, convertLegacyRequest, toDayRequest } from '@/lib/day-request'
 import { STAFF_SECRET_COLUMNS, STORE_SECRET_COLUMNS, check, omit, runAction, toRow, toRows } from '@/lib/server/action'
 import { requireAdmin } from '@/lib/server/dal'
+import { type StaffRank, staffRankOf } from '@/lib/staff-order'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { assert, isId, isJsonWithin, isMonthStart, isRecord, isShortText, nextMonthStart } from '@/lib/server/validation'
 
@@ -77,6 +78,8 @@ export type GenerateContext = {
   pastSettings: DataRow[]
   /** 要確認の要望 of the month (old memos the rules could not read). */
   reviews: RequestReview[]
+  /** Current paper-form order (id → position) for showing the schedule. */
+  staffRank: StaffRank
 }
 
 export async function getGenerateContext(storeId: string, monthStart: string): Promise<ActionResult<GenerateContext>> {
@@ -90,10 +93,11 @@ export async function getGenerateContext(storeId: string, monthStart: string): P
       db.from('generation_settings').select('*').eq('store_id', storeId).eq('target_month', monthStart),
       db.from('generation_settings').select('*').eq('store_id', storeId)
         .in('config_type', ['wd', 'we']).order('target_month', { ascending: false }).limit(10),
-      db.from('staff').select('id, name').eq('store_id', storeId),
+      db.from('staff').select('id, name, category, display_order').eq('store_id', storeId),
       loadMonthRequests(storeId, monthStart),
     ])
     check(staffResult.error)
+    const staffRows = toRows(staffResult.data)
     check(storeResult.error)
     check(draftResult.error)
     check(settingsResult.error)
@@ -104,7 +108,8 @@ export async function getGenerateContext(storeId: string, monthStart: string): P
       draft: toRow(draftResult.data),
       settings: toRows(settingsResult.data),
       pastSettings: toRows(pastResult.data),
-      reviews: toReviews(pending, toRows(staffResult.data)),
+      reviews: toReviews(pending, staffRows),
+      staffRank: staffRankOf(staffRows.map(row => ({ id: String(row.id), name: typeof row.name === 'string' ? row.name : '', category: row.category, display_order: row.display_order }))),
     }
   })
 }

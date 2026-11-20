@@ -18,6 +18,7 @@ import { useAdmin } from '@/context/AdminContext'
 import type { DataRow } from '@/lib/action-result'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { useFlash } from '@/components/FlashMessage'
+import { type StaffCategory, isStaffCategory, sortStaff } from '@/lib/staff-order'
 
 /** One roster row as edited on this screen. Only these fields are sent back and saved. */
 type RosterStaff = {
@@ -36,15 +37,20 @@ type RosterStaff = {
   parsed_conditions: unknown
   /** Saved on its own (weekday dialog), never by the bulk save. */
   weekly_availability: unknown
+  /** Paper-form order; changed in the reorder mode only. */
+  category: StaffCategory | null
+  display_order: number | null
 }
 
-type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions' | 'weekly_availability'>
+type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions' | 'weekly_availability' | 'category' | 'display_order'>
 
 /** Fields sent by the bulk / detail save: everything editable except the weekday choices. */
 const toSavePayload = (person: RosterStaff) => {
   const payload: Partial<RosterStaff> = { ...person }
   delete payload.weekly_availability
   delete payload.parsed_conditions
+  delete payload.category
+  delete payload.display_order
   return payload
 }
 
@@ -66,6 +72,8 @@ const toRosterStaff = (row: DataRow): RosterStaff => ({
   work_end_2: textOrNull(row.work_end_2),
   parsed_conditions: row.parsed_conditions,
   weekly_availability: row.weekly_availability,
+  category: isStaffCategory(row.category) ? row.category : null,
+  display_order: typeof row.display_order === 'number' ? row.display_order : null,
 })
 
 export default function StaffPage() {
@@ -478,7 +486,7 @@ export default function StaffPage() {
       )}
 
       <div className="space-y-3">
-        {staff.map((person) => {
+        {sortStaff(staff).map((person) => {
           const initials = person.name
             ?.split(/\s|・/)
             .filter(Boolean)
