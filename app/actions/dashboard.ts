@@ -9,7 +9,7 @@ import { applyWeeklyAvailabilityChange } from '@/lib/weekly-availability'
 import { type BusinessHours, businessHoursOf } from '@/lib/day-request'
 import { requireAdmin, requireSession } from '@/lib/server/dal'
 import { loadStaffRank } from '@/lib/server/staff-order'
-import type { StaffRank } from '@/lib/staff-order'
+import { type StaffCategory, type StaffRank, isStaffCategory, suggestCategory } from '@/lib/staff-order'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { clearFailures, staffThrottleKey } from '@/lib/server/throttle'
 import { assert, isDateKey, isId, isMonthStart, isShortText } from '@/lib/server/validation'
@@ -255,11 +255,20 @@ export async function resolveConditionRequest(storeId: string, requestId: string
   })
 }
 
-/** Admin approval / rejection of a self-registered staff member. */
-export async function resolveNewStaffRequest(storeId: string, requestId: string, approved: boolean): Promise<ActionResult<{ name: string }>> {
+/**
+ * Admin approval / rejection of a self-registered staff member. On approval the
+ * person goes to the end of the chosen category (the paper-form order).
+ */
+export async function resolveNewStaffRequest(
+  storeId: string,
+  requestId: string,
+  approved: boolean,
+  category: StaffCategory | null = null,
+): Promise<ActionResult<{ name: string }>> {
   return runAction('resolveNewStaffRequest', async () => {
     await requireAdmin(storeId)
     assert(isId(requestId) && typeof approved === 'boolean')
+    assert(category === null || isStaffCategory(category))
     const request = await loadPendingRequest(storeId, requestId, 'new_staff')
     const details = getNewStaffRegistrationDetails(request.details)
     if (!details) throw new UserFacingError('新規登録申請の内容を読み込めませんでした。')
@@ -268,7 +277,20 @@ export async function resolveNewStaffRequest(storeId: string, requestId: string,
     const resolvedAt = new Date().toISOString()
 
     if (approved) {
+      const chosenCategory = category ?? suggestCategory({
+        isEmployee: details.employment_type === '社員',
+        main_job: details.main_job,
+        weekly_availability: details.weekly_availability,
+        work_start_1: details.work_start_1,
+      })
+      const { data: last, error: lastError } = await db.from('staff').select('display_order')
+        .eq('store_id', storeId).eq('category', chosenCategory).not('display_order', 'is', null)
+        .order('display_order', { ascending: false }).limit(1)
+      check(lastError)
+      const lastOrder = toRows(last)[0]?.display_order
       const { error } = await db.from('staff').update({
+        category: chosenCategory,
+        display_order: (typeof lastOrder === 'number' ? lastOrder : 0) + 1,
         is_employee: details.employment_type === '社員',
         main_job: details.main_job,
         weekly_target_days: details.weekly_target_days,

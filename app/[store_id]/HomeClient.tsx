@@ -40,7 +40,7 @@ import { formatDayRequest } from '@/lib/day-request'
 import UsualAvailabilityCard from '@/components/UsualAvailabilityCard'
 import { CardSkeleton, LoadingNote, SkeletonBlock, SkeletonRegion } from '@/components/Skeleton'
 import { getConditionChangeDetails, getNewStaffRegistrationDetails, type ConditionChangeDetails } from '@/lib/staff-request-details'
-import { type StaffRank, sortByRank } from '@/lib/staff-order'
+import { STAFF_CATEGORIES, STAFF_CATEGORY_LABELS, type StaffCategory, type StaffRank, isStaffCategory, sortByRank, suggestCategory } from '@/lib/staff-order'
 
 type SchedulePerson = {
   id: string
@@ -177,6 +177,8 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
   const [schedule, setSchedule] = useState<ScheduleData | null>(() => isScheduleData(initialDashboard?.schedule) ? initialDashboard.schedule : null)
   /** Current paper-form order (id → position) for the shift list. */
   const [staffRank, setStaffRank] = useState<StaffRank>(() => initialDashboard?.staffRank ?? {})
+  /** Category picked for each pending registration (the suggestion until changed). */
+  const [approvalCategories, setApprovalCategories] = useState<Record<string, StaffCategory>>({})
   const [selectedDate, setSelectedDate] = useState(() => initial ? dateFromKey(initial.dateKey) : startOfLocalDay(new Date()))
   const [isSavingNotice, setIsSavingNotice] = useState(false)
   const [pinResetRequests, setPinResetRequests] = useState<PinResetRequest[]>(() => (initialDashboard?.pinResetRequests ?? []) as PinResetRequest[])
@@ -400,12 +402,12 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
     }
   }
 
-  const resolveNewStaffRequest = async (request: StaffRequestRecord, approved: boolean) => {
+  const resolveNewStaffRequest = async (request: StaffRequestRecord, approved: boolean, category?: StaffCategory) => {
     if (!isAdmin || isResolvingNewStaffRequest) return
     setIsResolvingNewStaffRequest(request.id)
     setError('')
     try {
-      const { name } = unwrap(await resolveNewStaffRequestAction(storeId, request.id, approved))
+      const { name } = unwrap(await resolveNewStaffRequestAction(storeId, request.id, approved, category ?? null))
       if (approved) {
         setSuccessMessage(`${name}さんの新規登録を承認しました。`)
       } else {
@@ -526,6 +528,13 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
             {newStaffRequests.map(request => {
               const details = getNewStaffRegistrationDetails(request.details)
               if (!details) return null
+              const suggested = suggestCategory({
+                isEmployee: details.employment_type === '社員',
+                main_job: details.main_job,
+                weekly_availability: details.weekly_availability,
+                work_start_1: details.work_start_1,
+              })
+              const chosenCategory = approvalCategories[request.id] ?? suggested
               return (
                 <div key={request.id} className="rounded-md border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -534,10 +543,22 @@ export default function HomeClient({ initial }: { initial: HomeInitialData | nul
                       <p className="mt-1 text-xs font-medium text-slate-500">週の希望勤務日数: 週{details.weekly_target_days}日　申請日時: {new Date(request.created_at).toLocaleString('ja-JP')}</p>
                       {details.weekly_availability && <p className="mt-1 text-xs text-slate-600">出勤できる時間: {formatWeeklyAvailability(details.weekly_availability)}</p>}
                       {details.memo && <p className="mt-1 whitespace-pre-wrap text-xs text-slate-600">店長へのメモ: {details.memo}</p>}
+                      <label className="mt-3 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-700">
+                        区分（並び順）
+                        <select value={chosenCategory} disabled={isResolvingNewStaffRequest !== null}
+                          onChange={event => {
+                            const value = event.target.value
+                            if (isStaffCategory(value)) setApprovalCategories(current => ({ ...current, [request.id]: value }))
+                          }}
+                          className="min-h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-slate-500">
+                          {STAFF_CATEGORIES.map(category => <option key={category} value={category}>{STAFF_CATEGORY_LABELS[category]}</option>)}
+                        </select>
+                        <span className="text-slate-500">{chosenCategory === suggested ? '申請内容からの提案。承認するとこの区分の最後に入ります。' : '承認するとこの区分の最後に入ります。'}</span>
+                      </label>
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button type="button" onClick={() => void resolveNewStaffRequest(request, false)} disabled={isResolvingNewStaffRequest !== null} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">却下</button>
-                      <button type="button" onClick={() => void resolveNewStaffRequest(request, true)} disabled={isResolvingNewStaffRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">承認</button>
+                      <button type="button" onClick={() => void resolveNewStaffRequest(request, true, chosenCategory)} disabled={isResolvingNewStaffRequest !== null} className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">承認</button>
                     </div>
                   </div>
                 </div>
