@@ -19,6 +19,13 @@ import ShiftTimeEditor from '@/components/ShiftTimeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DayRequestSheet from '@/components/DayRequestSheet'
 import GenerateSkeleton from './GenerateSkeleton'
+import LaborRulesPanel from '@/components/LaborRulesPanel'
+import HourlySalesPanel from '@/components/HourlySalesPanel'
+import DemandPanel, { type HourJobValues } from '@/components/DemandPanel'
+import { getPastStaffingCurve, type HourlySalesRow, type PastStaffingCurveResult } from '@/app/actions/labor'
+import { DEFAULT_LABOR_RULES, type LaborRules, laborRulesOf } from '@/lib/labor-rules'
+import { type RequiredCurve, parseRequiredCurve } from '@/lib/required-curve'
+import { peopleFromSales } from '@/lib/hourly-sales'
 import { useUnsavedChanges } from '@/lib/client/app-version'
 import { useFlash } from '@/components/FlashMessage'
 import { type StaffRank, sortByRank } from '@/lib/staff-order'
@@ -29,6 +36,7 @@ import {
   fToT,
   generateSchedule,
   isMultiRoleStaff,
+  jobForGroup,
   shiftHoursFromLabel,
   tToF,
   type GeneratedSchedule,
@@ -55,7 +63,15 @@ type GenerationSettingRow = {
   config_type: string
   counts: unknown
   slots: unknown
+  expected_sales?: unknown
+  required_curve?: unknown
 }
+
+/** Starting values until the manager enters expected sales (provisional: year-end averages). */
+const DEFAULT_EXPECTED_SALES: Record<string, number> = { wd: 230_000, we: 345_000 }
+
+const expectedSalesOf = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
 
 type SlotTimes = { start: number; end: number }
 
@@ -157,6 +173,13 @@ export default function GeneratePage() {
   const [requestReviews, setRequestReviews] = useState<RequestReview[]>([])
   /** Paper-form order (id → position) for showing the schedule; generation itself keeps its own order. */
   const [staffRank, setStaffRank] = useState<StaffRank>({})
+  /** Labor rules, expected sales and required staff (commit 3: stored and shown; the generator uses them later). */
+  const [laborRules, setLaborRules] = useState<LaborRules>(DEFAULT_LABOR_RULES)
+  const [expectedSales, setExpectedSales] = useState<Record<string, number | null>>({})
+  const [curves, setCurves] = useState<Record<string, RequiredCurve | null>>({})
+  const [hourlySales, setHourlySales] = useState<Record<'wd' | 'we', HourlySalesRow[]>>({ wd: [], we: [] })
+  const [pastCurve, setPastCurve] = useState<PastStaffingCurveResult | null>(null)
+  const [isLoadingPast, setIsLoadingPast] = useState(false)
   const [resolvedReviews, setResolvedReviews] = useState<Record<string, DayRequest>>({})
   const [reviewSheet, setReviewSheet] = useState<RequestReview | null>(null)
   const [reviewError, setReviewError] = useState('')
@@ -204,6 +227,8 @@ export default function GeneratePage() {
     // 要確認の要望 arrive with the context (one Server Action when the month opens).
     setRequestReviews(context.reviews)
     setStaffRank(context.staffRank)
+    setLaborRules(laborRulesOf(context.store))
+    setPastCurve(null)
     setResolvedReviews({})
     setReviewError('')
     const sInfo = context.store ? toStoreInfo(context.store) : null
@@ -228,12 +253,16 @@ export default function GeneratePage() {
 
     const newCounts: Record<string, Record<string, number>> = {}
     const newSlots: Record<string, Record<string, SlotTimes>> = {}
+    const newSales: Record<string, number | null> = {}
+    const newCurves: Record<string, RequiredCurve | null> = {}
     const specials: string[] = []
 
     if (currentSettings && currentSettings.length > 0) {
       currentSettings.forEach(set => {
         newCounts[set.config_type] = toCounts(set.counts)
         newSlots[set.config_type] = toSlots(set.slots)
+        newSales[set.config_type] = expectedSalesOf(set.expected_sales)
+        newCurves[set.config_type] = parseRequiredCurve(set.required_curve)
         if (set.config_type !== 'wd' && set.config_type !== 'we') {
           specials.push(set.config_type)
         }
@@ -248,10 +277,14 @@ export default function GeneratePage() {
         if (latestWd) {
           newCounts['wd'] = toCounts(latestWd.counts)
           newSlots['wd'] = toSlots(latestWd.slots)
+          newSales['wd'] = expectedSalesOf(latestWd.expected_sales)
+          newCurves['wd'] = parseRequiredCurve(latestWd.required_curve)
         }
         if (latestWe) {
           newCounts['we'] = toCounts(latestWe.counts)
           newSlots['we'] = toSlots(latestWe.slots)
+          newSales['we'] = expectedSalesOf(latestWe.expected_sales)
+          newCurves['we'] = parseRequiredCurve(latestWe.required_curve)
         }
       } else {
         ;['wd', 'we'].forEach(t => {
@@ -269,6 +302,9 @@ export default function GeneratePage() {
 
     setCounts(newCounts)
     setSlots(newSlots)
+    for (const type of ['wd', 'we']) if (newSales[type] == null) newSales[type] = DEFAULT_EXPECTED_SALES[type]
+    setExpectedSales(newSales)
+    setCurves(newCurves)
     setSelectedSpecialDays(specials)
     } catch (error) {
       setDraftError(`下書きまたは設定を読み込めませんでした: ${error instanceof Error ? error.message : '通信エラー'}`)
@@ -328,6 +364,8 @@ export default function GeneratePage() {
         config_type: type,
         counts: counts[type] || {},
         slots: slots[type] || {},
+        expected_sales: expectedSales[type] ?? null,
+        required_curve: curves[type] ?? null,
       }))
       unwrap(await saveGenerationSettings(String(Array.isArray(store_id) ? store_id[0] : store_id), targetMonthStr, entries))
       notify('設定を保存しました。')
@@ -336,8 +374,49 @@ export default function GeneratePage() {
     } finally { setIsSaving(false) }
   }
 
-  const currentTabCounts = counts[activeTab] || {}
-  const currentTabSlots = slots[activeTab] || {}
+  const currentTabCounts = useMemo(() => counts[activeTab] || {}, [activeTab, counts])
+  const currentTabSlots = useMemo(() => slots[activeTab] || {}, [activeTab, slots])
+  const demandDayType: 'wd' | 'we' = activeTab === 'wd' ? 'wd' : 'we'
+  const demandHours = useMemo(() => {
+    const from = Math.floor(minTime)
+    const to = Math.ceil(maxTime)
+    return Array.from({ length: Math.max(0, Math.min(24, to) - from) }, (_, index) => from + index)
+  }, [maxTime, minTime])
+  const slotPeople = useMemo<HourJobValues>(() => {
+    const result: HourJobValues = { ホール: {}, キッチン: {} }
+    for (const group of groups) {
+      const job = jobForGroup(group) ?? 'ホール'
+      for (let index = 0; index < (currentTabCounts[group] || 0); index++) {
+        const slot = currentTabSlots[`${group}_${index}`] || { start: 10, end: 18 }
+        const end = slot.end < slot.start ? slot.end + 24 : slot.end
+        for (let hour = Math.floor(slot.start); hour < Math.ceil(end); hour++) {
+          const overlap = Math.min(end, hour + 1) - Math.max(slot.start, hour)
+          if (overlap > 0) result[job][hour] = (result[job][hour] ?? 0) + overlap
+        }
+      }
+    }
+    return result
+  }, [currentTabCounts, currentTabSlots, groups])
+  const pastPeople = useMemo<HourJobValues | null>(() => {
+    if (!pastCurve) return null
+    const part = pastCurve[demandDayType].curve
+    return {
+      ホール: Object.fromEntries(Object.entries(part['ホール']).map(([hour, people]) => [Number(hour), people])),
+      キッチン: Object.fromEntries(Object.entries(part['キッチン']).map(([hour, people]) => [Number(hour), people])),
+    }
+  }, [demandDayType, pastCurve])
+  const salesPeople = useMemo(() => hourlySales[demandDayType].length > 0
+    ? peopleFromSales(hourlySales[demandDayType].map(row => ({ hour: row.hour, sales: row.sales, customers: row.customers })), laborRules.targetSalesPerLaborHour, laborRules.salesOffsetHours)
+    : null, [demandDayType, hourlySales, laborRules])
+
+  const loadPastCurve = async () => {
+    if (!store_id) return
+    setIsLoadingPast(true)
+    const result = await getPastStaffingCurve(Array.isArray(store_id) ? store_id[0] : store_id, targetMonthStr)
+    setIsLoadingPast(false)
+    if (result.ok) setPastCurve(result.data)
+    else notify('過去の実績を集計できませんでした: ' + result.error, 'error')
+  }
 
   const currentTotalMH = useMemo(() => {
     let total = 0
@@ -880,6 +959,14 @@ export default function GeneratePage() {
         </div>
       </section>
 
+      <details className="mb-6 rounded-md border border-[var(--border)] bg-slate-50 p-4">
+        <summary className="cursor-pointer text-base font-bold text-slate-900">ルール設定・時間別売上</summary>
+        <div className="mt-4 space-y-4">
+          <LaborRulesPanel storeId={String(Array.isArray(store_id) ? store_id[0] : store_id)} initial={laborRules} daysInMonth={daysInMonth} onSaved={setLaborRules} />
+          <HourlySalesPanel storeId={String(Array.isArray(store_id) ? store_id[0] : store_id)} openHour={Math.floor(minTime)} closeHour={Math.min(24, Math.ceil(maxTime))} year={targetYear} onChange={setHourlySales} />
+        </div>
+      </details>
+
       <div className="sticky top-0 z-30 mb-6 border-b border-[var(--border)] bg-[var(--background)]/95 pb-4 pt-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">
           <TabButton id="wd" label="平日" active={activeTab} onClick={setActiveTab} />
@@ -946,6 +1033,23 @@ export default function GeneratePage() {
             </div>
           )
         })}
+
+        <DemandPanel
+          label={activeTab === 'wd' ? '平日' : activeTab === 'we' ? '土日祝' : `${Number(activeTab.slice(-2))}日`}
+          hours={demandHours}
+          expectedSales={expectedSales[activeTab] ?? null}
+          onExpectedSales={value => setExpectedSales(current => ({ ...current, [activeTab]: value }))}
+          curve={curves[activeTab] ?? null}
+          onCurve={curve => setCurves(current => ({ ...current, [activeTab]: curve }))}
+          slotPeople={slotPeople}
+          pastPeople={pastPeople}
+          pastDays={pastCurve ? pastCurve[demandDayType].days : null}
+          salesPeople={salesPeople}
+          slotLaborHours={currentTotalMH}
+          target={laborRules.targetSalesPerLaborHour}
+          onLoadPast={() => void loadPastCurve()}
+          isLoadingPast={isLoadingPast}
+        />
 
         {generatedSchedule && (
           <section className="space-y-3">

@@ -42,9 +42,19 @@ type RosterStaff = {
   /** Paper-form order; changed in the reorder mode only. */
   category: StaffCategory | null
   display_order: number | null
+  /** On-site flags and personal caps (migration H). */
+  is_minor: boolean
+  can_lead: boolean
+  can_open: boolean
+  can_close: boolean
+  weekly_hour_cap: number | null
+  monthly_hour_cap: number | null
+  /** The manager confirmed 18歳未満 and the flags (sent only when changed on this screen). */
+  flags_confirmed: boolean
+  flags_confirmed_loaded: boolean
 }
 
-type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions' | 'weekly_availability' | 'category' | 'display_order'>
+type EditableField = Exclude<keyof RosterStaff, 'id' | 'parsed_conditions' | 'weekly_availability' | 'category' | 'display_order' | 'flags_confirmed_loaded'>
 
 /** Fields sent by the bulk / detail save: everything editable except the weekday choices. */
 const toSavePayload = (person: RosterStaff) => {
@@ -53,7 +63,15 @@ const toSavePayload = (person: RosterStaff) => {
   delete payload.parsed_conditions
   delete payload.category
   delete payload.display_order
+  // Confirming stamps the time on the server, so it is sent only when it changed here.
+  if (person.flags_confirmed === person.flags_confirmed_loaded) delete payload.flags_confirmed
+  delete payload.flags_confirmed_loaded
   return payload
+}
+
+const capOf = (value: unknown): number | null => {
+  const hours = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN
+  return Number.isFinite(hours) ? hours : null
 }
 
 const textOrNull = (value: unknown) => (typeof value === 'string' ? value : null)
@@ -76,6 +94,14 @@ const toRosterStaff = (row: DataRow): RosterStaff => ({
   weekly_availability: row.weekly_availability,
   category: isStaffCategory(row.category) ? row.category : null,
   display_order: typeof row.display_order === 'number' ? row.display_order : null,
+  is_minor: row.is_minor === true,
+  can_lead: row.can_lead === true,
+  can_open: row.can_open === true,
+  can_close: row.can_close === true,
+  weekly_hour_cap: capOf(row.weekly_hour_cap),
+  monthly_hour_cap: capOf(row.monthly_hour_cap),
+  flags_confirmed: typeof row.flags_confirmed_at === 'string',
+  flags_confirmed_loaded: typeof row.flags_confirmed_at === 'string',
 })
 
 export default function StaffPage() {
@@ -165,6 +191,7 @@ export default function StaffPage() {
     else {
       notify('すべての変更を保存しました。')
       setHasRosterEdits(false)
+      setStaff(prev => prev.map(person => ({ ...person, flags_confirmed_loaded: person.flags_confirmed })))
     }
     setIsBulkSaving(false)
   }
@@ -641,6 +668,46 @@ export default function StaffPage() {
                   </button>
                 )}
               </div>
+
+              {isAdmin && (
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">現場の設定</span>
+                    {person.flags_confirmed
+                      ? <span className="rounded border border-slate-300 px-1.5 text-[11px] font-bold text-slate-600">確認済み</span>
+                      : <span className="rounded border border-red-200 bg-red-50 px-1.5 text-[11px] font-bold text-red-700">未確認</span>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-700">
+                    {([
+                      ['is_minor', '18歳未満'],
+                      ['can_lead', '責任者'],
+                      ['can_open', '開店'],
+                      ['can_close', '締め'],
+                    ] as const).map(([field, label]) => (
+                      <label key={field} className="inline-flex min-h-9 items-center gap-1.5">
+                        <input type="checkbox" checked={person[field]} onChange={event => handleUpdateField(person.id, field, event.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+                        {label}
+                      </label>
+                    ))}
+                    {([
+                      ['weekly_hour_cap', '週の上限'],
+                      ['monthly_hour_cap', '月の上限'],
+                    ] as const).map(([field, label]) => (
+                      <label key={field} className="inline-flex items-center gap-1.5">
+                        {label}
+                        <input type="number" inputMode="decimal" min={0} step={0.5} value={person[field] ?? ''} placeholder="なし" aria-label={`${person.name}さんの${label}（時間）`}
+                          onChange={event => handleUpdateField(person.id, field, event.target.value === '' ? null : Math.max(0, Math.round(Number(event.target.value) * 2) / 2))}
+                          className="h-9 w-20 rounded border border-slate-200 bg-white px-2 text-right tabular-nums" />時間
+                      </label>
+                    ))}
+                    <button type="button" onClick={() => handleUpdateField(person.id, 'flags_confirmed', !person.flags_confirmed)}
+                      className="min-h-9 rounded border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                      {person.flags_confirmed ? '未確認に戻す' : '確認済みにする'}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">18歳未満は深夜に入りません。確認済みにして「全員の変更を一括保存」で保存します。</p>
+                </div>
+              )}
 
               <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 md:grid-cols-[1.8fr_0.95fr]">
                 <div>
