@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { addStaff, deleteStaff, getStaffPageData, saveStaffMember, saveStaffRoster } from '@/app/actions/staff'
+import { addStaff, deleteStaff, getStaffPageData, saveStaffMember, saveStaffOrder, saveStaffRoster } from '@/app/actions/staff'
+import StaffOrderEditor, { type OrderEditorRow } from '@/components/StaffOrderEditor'
+import { ArrowUpDown } from 'lucide-react'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { type BusinessHours, DEFAULT_BUSINESS_HOURS } from '@/lib/day-request'
 import {
@@ -97,6 +99,8 @@ export default function StaffPage() {
   const [isWeeklySaving, setIsWeeklySaving] = useState(false)
   /** Roster edits not yet saved with 「全員の変更を一括保存」 (the reload banner warns about them). */
   const [hasRosterEdits, setHasRosterEdits] = useState(false)
+  /** 並べ替えモード (category / display order only). */
+  const [isOrdering, setIsOrdering] = useState(false)
   useUnsavedChanges('staff', hasRosterEdits)
   const { notify } = useFlash()
 
@@ -193,6 +197,19 @@ export default function StaffPage() {
     setIsNewStaffSaving(false)
   }
 
+  const saveOrder = async (rows: OrderEditorRow[]): Promise<string | null> => {
+    const result = await saveStaffOrder(storeId, rows)
+    if (!result.ok) return result.error
+    const byId = new Map(rows.map(row => [row.id, row]))
+    setStaff(prev => prev.map(person => {
+      const row = byId.get(person.id)
+      return row ? { ...person, category: row.category, display_order: row.display_order } : person
+    }))
+    setIsOrdering(false)
+    notify('並び順を保存しました。')
+    return null
+  }
+
   const openWeeklyEditor = (person: RosterStaff) => {
     setWeeklyTarget({
       id: person.id,
@@ -285,8 +302,17 @@ export default function StaffPage() {
         onCancel={() => setStaffPendingDeletion(null)}
       />
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <h1 className="text-2xl font-bold text-[var(--text)]">{storeId}店 スタッフ一覧</h1>
-        {isAdmin && (
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold text-[var(--text)]">{storeId}店 スタッフ一覧</h1>
+          {isAdmin && !isOrdering && (
+            <button type="button" onClick={() => setIsOrdering(true)} disabled={hasRosterEdits}
+              title={hasRosterEdits ? '先に「全員の変更を一括保存」してください' : undefined}
+              className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <ArrowUpDown size={16} aria-hidden="true" />並べ替え
+            </button>
+          )}
+        </div>
+        {isAdmin && !isOrdering && (
           <button
             onClick={handleBulkSave}
             disabled={isSaving}
@@ -486,7 +512,14 @@ export default function StaffPage() {
       )}
 
       <div className="space-y-3">
-        {sortStaff(staff).map((person) => {
+        {isOrdering && (
+          <StaffOrderEditor
+            staff={staff.map(person => ({ id: person.id, name: person.name, category: person.category, display_order: person.display_order, is_employee: person.is_employee }))}
+            onSave={saveOrder}
+            onCancel={() => setIsOrdering(false)}
+          />
+        )}
+        {!isOrdering && sortStaff(staff).map((person) => {
           const initials = person.name
             ?.split(/\s|・/)
             .filter(Boolean)
@@ -517,6 +550,12 @@ export default function StaffPage() {
                       />
                     ) : (
                       <div className="truncate text-lg font-bold text-slate-800">{person.name}</div>
+                    )}
+                    <p className="mt-1 text-xs font-medium text-slate-500">区分: {person.category ?? '区分なし'}</p>
+                    {(person.category === '社員') !== person.is_employee && person.category !== null && (
+                      <p className="mt-0.5 text-xs font-bold text-red-700">
+                        {person.is_employee ? '社員権限がありますが、区分が社員ではありません。' : '区分は社員ですが、社員権限がありません。'}
+                      </p>
                     )}
                   </div>
                 </div>

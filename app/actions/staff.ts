@@ -6,6 +6,7 @@ import { STAFF_SECRET_COLUMNS, UserFacingError, check, omit, runAction, toRow, t
 import { getStoreBusinessHours, weeklyAvailabilityColumns } from '@/lib/server/business-hours'
 import type { BusinessHours } from '@/lib/day-request'
 import { parseWeeklyAvailability } from '@/lib/weekly-availability'
+import { type StaffCategory, isStaffCategory } from '@/lib/staff-order'
 import { requireAdmin } from '@/lib/server/dal'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { INVALID_INPUT, assert, isId, isRecord, isShortText, isTimeText } from '@/lib/server/validation'
@@ -136,6 +137,41 @@ export async function deleteStaff(storeId: string, staffId: string): Promise<Act
     if (String(staffId) === session.id) throw new UserFacingError('ログイン中の自分自身は削除できません。')
     const { error } = await getAdminClient().from('staff').delete().eq('id', staffId).eq('store_id', storeId)
     check(error)
+    return null
+  })
+}
+
+export type StaffOrderRow = { id: string; category: StaffCategory | null; display_order: number | null }
+
+/**
+ * 並べ替えモード: saves category and display order only (the paper-form order).
+ * Every row must be a staff member of this store; nothing else is changed.
+ */
+export async function saveStaffOrder(storeId: string, rows: unknown): Promise<ActionResult<null>> {
+  return runAction('saveStaffOrder', async () => {
+    await requireAdmin(storeId)
+    assert(Array.isArray(rows) && rows.length > 0 && rows.length <= 500)
+    const updates = rows.map(row => {
+      assert(isRecord(row) && isId(row.id))
+      assert(row.category === null || isStaffCategory(row.category))
+      assert(row.display_order === null || (typeof row.display_order === 'number' && Number.isInteger(row.display_order) && row.display_order >= 1 && row.display_order <= 100_000))
+      return { id: String(row.id), category: row.category as StaffCategory | null, display_order: row.display_order as number | null }
+    })
+    assert(new Set(updates.map(row => row.id)).size === updates.length)
+
+    const db = getAdminClient()
+    const { data, error } = await db.from('staff').select('id').eq('store_id', storeId).in('id', updates.map(row => row.id))
+    check(error)
+    assert(toRows(data).length === updates.length, '名簿が変わっています。画面を開き直してください。')
+
+    for (let index = 0; index < updates.length; index += 5) {
+      await Promise.all(updates.slice(index, index + 5).map(async row => {
+        const { error: updateError } = await db.from('staff')
+          .update({ category: row.category, display_order: row.display_order })
+          .eq('id', row.id).eq('store_id', storeId)
+        check(updateError)
+      }))
+    }
     return null
   })
 }
