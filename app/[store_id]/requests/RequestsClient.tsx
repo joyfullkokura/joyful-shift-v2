@@ -13,6 +13,7 @@ import {
   saveRequestDeadlineDay,
 } from '@/app/actions/requests'
 import { DEFAULT_REQUEST_DEADLINE_DAY, formatDeadline, requestDeadlineDate } from '@/lib/request-deadline'
+import { fillRequestsSheet } from '@/lib/requests-excel'
 import { unwrap } from '@/lib/action-result'
 import { type BusinessHours, type DayRequest, DEFAULT_BUSINESS_HOURS, formatDayRequest, timeToMinutes } from '@/lib/day-request'
 import { getHolidayName, isHoliday } from '@/lib/holidays'
@@ -39,14 +40,6 @@ const getDateKind = (dateStr: string) => {
   return 'weekday'
 }
 
-const excelCellBorder: Partial<ExcelJS.Borders> = {
-  top: { style: 'thin' },
-  left: { style: 'thin' },
-  bottom: { style: 'thin' },
-  right: { style: 'thin' },
-}
-
-
 const hourText = (time: string | null) => {
   const minutes = timeToMinutes(time)
   if (minutes === null) return ''
@@ -64,17 +57,6 @@ const compactLabel = (request: DayRequest | null) => {
     case 'range': return `${hourText(request.start)}-${hourText(request.end)}`
     default: return ''
   }
-}
-
-const toColumnName = (index: number) => {
-  let column = ''
-  let current = index
-  while (current > 0) {
-    const remainder = (current - 1) % 26
-    column = String.fromCharCode(65 + remainder) + column
-    current = Math.floor((current - 1) / 26)
-  }
-  return column
 }
 
 type SheetTarget = { dates: string[] }
@@ -261,102 +243,18 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   }
 
   const exportToExcel = async () => {
+    // Paper 休日申込表 layout (lib/requests-excel.ts): grouped by category in the store order.
     const workbook = new ExcelJS.Workbook()
     const worksheet = workbook.addWorksheet(`${targetMonth}月休み希望`)
-    worksheet.pageSetup.orientation = 'landscape'
-    worksheet.pageSetup.fitToPage = true
-    worksheet.pageSetup.fitToWidth = 1
-    worksheet.pageSetup.fitToHeight = 1
-    worksheet.pageSetup.margins = { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0, footer: 0 }
-
-    const titleCell = worksheet.getCell('A1')
-    titleCell.value = `【${targetYear}年${targetMonth}月】 休み希望・要望 一覧表`
-    titleCell.font = { bold: true, size: 18 }
-    titleCell.alignment = { horizontal: 'center', vertical: 'middle' }
-    worksheet.mergeCells(1, 1, 1, daysArray.length + 2)
-
-    const headerRow = worksheet.getRow(3)
-    headerRow.values = ['名前', ...daysArray.map(d => String(d)), '休み希望数']
-    headerRow.height = 24
-    headerRow.font = { bold: true, size: 10 }
-    headerRow.alignment = { horizontal: 'center', vertical: 'middle' }
-
-    worksheet.getColumn(1).width = 12
-    worksheet.getColumn(daysArray.length + 2).width = 12
-    for (let i = 0; i < daysArray.length; i += 1) {
-      worksheet.getColumn(i + 2).width = 5.2
-    }
-
-    staff.forEach((person, staffIdx) => {
-      const currentRow = worksheet.getRow(4 + staffIdx)
-      currentRow.height = 48
-      currentRow.getCell(1).value = person.name
-      currentRow.getCell(1).font = { bold: true, size: 11 }
-      currentRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' }
-      currentRow.getCell(1).border = excelCellBorder
-
-      const staffOffCount = allRequests.filter(r => r.staff_id === person.id && r.request?.kind === 'off').length
-
-      daysArray.forEach((day, dayIdx) => {
-        const dateStr = dateKey(day)
-        const req = allRequests.find(r => r.staff_id === person.id && r.date === dateStr)
-        const cell = currentRow.getCell(dayIdx + 2)
-        const isOff = req?.request?.kind === 'off'
-        const timeText = isOff ? '' : formatDayRequest(req?.request ?? null, 'long')
-        const memoText = (req?.memo || '').trim()
-
-        cell.border = excelCellBorder
-        cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }
-
-        if (isOff) {
-          cell.value = memoText ? `✖\n${memoText}` : '✖'
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } }
-          cell.font = { bold: true, size: 9, color: { argb: 'FFFF0000' } }
-        } else {
-          cell.value = [timeText, memoText].filter(Boolean).join('\n')
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
-          cell.font = { color: { argb: 'FF333333' }, size: 7, bold: Boolean(timeText || memoText) }
-        }
-      })
-
-      const countCell = currentRow.getCell(daysArray.length + 2)
-      countCell.value = `${staffOffCount}日`
-      countCell.border = excelCellBorder
-      countCell.alignment = { vertical: 'middle', horizontal: 'center' }
-      countCell.font = { bold: true, size: 11 }
-      countCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }
+    fillRequestsSheet(worksheet, {
+      year: targetYear,
+      month: targetMonth,
+      staff: staff.map(person => ({ id: person.id, name: person.name, category: person.category })),
+      requests: allRequests,
+      events,
+      deadline: deadline || requestDeadlineDate(currentMonthStart, deadlineDay),
+      isHoliday,
     })
-
-    for (let col = 1; col <= headerRow.cellCount; col += 1) {
-      const cell = headerRow.getCell(col)
-      cell.border = excelCellBorder
-      cell.alignment = { horizontal: 'center', vertical: 'middle' }
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
-      if (col >= 2 && col <= daysArray.length + 1) {
-        const dateKind = getDateKind(dateKey(col - 1))
-        if (dateKind === 'holiday' || dateKind === 'sunday') {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } }
-          cell.font = { bold: true, color: { argb: 'FFFF0000' }, size: 10 }
-        } else if (dateKind === 'saturday') {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE3F2FD' } }
-          cell.font = { bold: true, color: { argb: 'FF0000FF' }, size: 10 }
-        } else {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } }
-          cell.font = { bold: true, color: { argb: 'FF333333' }, size: 10 }
-        }
-      }
-      if (col === daysArray.length + 2) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }
-        cell.font = { bold: true, color: { argb: 'FF111827' }, size: 10 }
-      }
-    }
-
-    worksheet.getCell('A3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
-    worksheet.getCell('A3').font = { bold: true, size: 10 }
-    worksheet.getCell('A3').alignment = { horizontal: 'center', vertical: 'middle' }
-
-    const lastColumn = toColumnName(daysArray.length + 2)
-    worksheet.getCell(`${lastColumn}1`).font = { bold: true }
 
     const buffer = await workbook.xlsx.writeBuffer()
     saveAs(new Blob([buffer]), `${targetMonth}月休み希望_${storeId}.xlsx`)
