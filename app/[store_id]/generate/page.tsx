@@ -26,6 +26,10 @@ import { getPastStaffingCurve, type HourlySalesRow, type PastStaffingCurveResult
 import { DEFAULT_LABOR_RULES, type LaborRules, laborRulesOf } from '@/lib/labor-rules'
 import { type RequiredCurve, parseRequiredCurve } from '@/lib/required-curve'
 import { peopleFromSales } from '@/lib/hourly-sales'
+import { type CapacityCheck, checkCapacity } from '@/lib/shift-generator/capacity'
+import { evaluateSchedule } from '@/lib/shift-generator/metrics'
+import ScheduleMetricsPanel from '@/components/ScheduleMetricsPanel'
+import type { PreviousMonthTail } from '@/app/actions/generate'
 import { useUnsavedChanges } from '@/lib/client/app-version'
 import { useFlash } from '@/components/FlashMessage'
 import { type StaffRank, sortByRank } from '@/lib/staff-order'
@@ -180,6 +184,8 @@ export default function GeneratePage() {
   const [hourlySales, setHourlySales] = useState<Record<'wd' | 'we', HourlySalesRow[]>>({ wd: [], we: [] })
   const [pastCurve, setPastCurve] = useState<PastStaffingCurveResult | null>(null)
   const [isLoadingPast, setIsLoadingPast] = useState(false)
+  /** What the last generation ran with: staff flags, the previous month's last week, the capacity check. */
+  const [generationExtras, setGenerationExtras] = useState<{ staff: StaffRecord[]; previousMonth: PreviousMonthTail; capacity: CapacityCheck } | null>(null)
   const [resolvedReviews, setResolvedReviews] = useState<Record<string, DayRequest>>({})
   const [reviewSheet, setReviewSheet] = useState<RequestReview | null>(null)
   const [reviewError, setReviewError] = useState('')
@@ -324,6 +330,30 @@ export default function GeneratePage() {
     ? sortByRank(generatedSchedule.staff, staffRank)
     : []
 
+  // Evaluation of the schedule on screen (generated or a draft being edited). Read-only.
+  const evaluation = (() => {
+    if (!generatedSchedule) return null
+    const minors = new Set((generationExtras?.staff ?? []).filter(person => (person as { is_minor?: unknown }).is_minor === true).map(person => person.id))
+    return evaluateSchedule({
+      targetYear,
+      targetMonth,
+      staff: generatedSchedule.staff.map(person => ({
+        id: person.id, name: person.name, isEmployee: person.isEmployee, isMinor: minors.has(person.id),
+        mainJob: person.mainJob, shifts: person.shifts, assignedRoles: person.assignedRoles,
+      })),
+      previousMonth: generationExtras?.previousMonth.staff,
+      rules: laborRules,
+      selectedSpecialDays,
+      holidays: holidaysOfYear(targetYear),
+      expectedSales,
+      curves,
+    })
+  })()
+  const staffNames = Object.fromEntries((generatedSchedule?.staff ?? []).map(person => [person.id, person.name]))
+  const metricsPanel = evaluation
+    ? <ScheduleMetricsPanel evaluation={evaluation} capacity={generationExtras?.capacity ?? null} target={laborRules.targetSalesPerLaborHour} staffNames={staffNames} />
+    : null
+
   useEffect(() => {
     loadAllSettings()
   }, [loadAllSettings])
@@ -457,7 +487,7 @@ export default function GeneratePage() {
       ? `要確認の要望が${pendingReviews.length}件残っているため、その日は基本条件で作成しました。`
       : '')
 
-    const schedule = generateSchedule({
+    const generatorInput = {
       staff: (staffData || []) as StaffRecord[],
       requests,
       store: storeInfo,
@@ -469,6 +499,12 @@ export default function GeneratePage() {
       selectedSpecialDays,
       monthlyTargetHours,
       holidays: holidaysOfYear(targetYear),
+    }
+    const schedule = generateSchedule(generatorInput)
+    setGenerationExtras({
+      staff: generatorInput.staff,
+      previousMonth: inputsResult.data.previousMonth,
+      capacity: checkCapacity({ ...generatorInput, rules: laborRules, expectedSales }),
     })
     setGeneratedSchedule(schedule)
   }
@@ -662,6 +698,7 @@ export default function GeneratePage() {
             </div>
           </div>
         </header>
+        {metricsPanel && <div className="mb-5">{metricsPanel}</div>}
 
         <ConfirmDialog
           open={pendingDraftConfirmation === 'discard'}
@@ -1050,6 +1087,8 @@ export default function GeneratePage() {
           onLoadPast={() => void loadPastCurve()}
           isLoadingPast={isLoadingPast}
         />
+
+        {metricsPanel}
 
         {generatedSchedule && (
           <section className="space-y-3">
