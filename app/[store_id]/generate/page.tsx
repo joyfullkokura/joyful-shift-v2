@@ -184,6 +184,7 @@ export default function GeneratePage() {
   const [hourlySales, setHourlySales] = useState<Record<'wd' | 'we', HourlySalesRow[]>>({ wd: [], we: [] })
   const [pastCurve, setPastCurve] = useState<PastStaffingCurveResult | null>(null)
   const [isLoadingPast, setIsLoadingPast] = useState(false)
+  const [flagCounts, setFlagCounts] = useState<{ lead: number; open: number; close: number } | null>(null)
   /** What the last generation ran with: staff flags, the previous month's last week, the capacity check. */
   const [generationExtras, setGenerationExtras] = useState<{ staff: StaffRecord[]; previousMonth: PreviousMonthTail; capacity: CapacityCheck } | null>(null)
   const [resolvedReviews, setResolvedReviews] = useState<Record<string, DayRequest>>({})
@@ -234,6 +235,7 @@ export default function GeneratePage() {
     setRequestReviews(context.reviews)
     setStaffRank(context.staffRank)
     setLaborRules(laborRulesOf(context.store))
+    setFlagCounts(context.flagCounts)
     setPastCurve(null)
     setResolvedReviews({})
     setReviewError('')
@@ -999,7 +1001,7 @@ export default function GeneratePage() {
       <details className="mb-6 rounded-md border border-[var(--border)] bg-slate-50 p-4">
         <summary className="cursor-pointer text-base font-bold text-slate-900">ルール設定・時間別売上</summary>
         <div className="mt-4 space-y-4">
-          <LaborRulesPanel storeId={String(Array.isArray(store_id) ? store_id[0] : store_id)} initial={laborRules} daysInMonth={daysInMonth} onSaved={setLaborRules} />
+          <LaborRulesPanel storeId={String(Array.isArray(store_id) ? store_id[0] : store_id)} initial={laborRules} daysInMonth={daysInMonth} flagCounts={flagCounts} onSaved={setLaborRules} />
           <HourlySalesPanel storeId={String(Array.isArray(store_id) ? store_id[0] : store_id)} openHour={Math.floor(minTime)} closeHour={Math.min(24, Math.ceil(maxTime))} year={targetYear} onChange={setHourlySales} />
         </div>
       </details>

@@ -81,7 +81,11 @@ export type GenerateContext = {
   reviews: RequestReview[]
   /** Current paper-form order (id → position) for showing the schedule. */
   staffRank: StaffRank
+  /** How many staff are marked 責任者 / 開店 / 締め (warns before those checks are switched on). */
+  flagCounts: StaffFlagCounts
 }
+
+export type StaffFlagCounts = { lead: number; open: number; close: number }
 
 export async function getGenerateContext(storeId: string, monthStart: string): Promise<ActionResult<GenerateContext>> {
   return runAction('getGenerateContext', async () => {
@@ -94,7 +98,7 @@ export async function getGenerateContext(storeId: string, monthStart: string): P
       db.from('generation_settings').select('*').eq('store_id', storeId).eq('target_month', monthStart),
       db.from('generation_settings').select('*').eq('store_id', storeId)
         .in('config_type', ['wd', 'we']).order('target_month', { ascending: false }).limit(10),
-      db.from('staff').select('id, name, category, display_order').eq('store_id', storeId),
+      db.from('staff').select('id, name, category, display_order, can_lead, can_open, can_close').eq('store_id', storeId),
       loadMonthRequests(storeId, monthStart),
     ])
     check(staffResult.error)
@@ -111,6 +115,11 @@ export async function getGenerateContext(storeId: string, monthStart: string): P
       pastSettings: toRows(pastResult.data),
       reviews: toReviews(pending, staffRows),
       staffRank: staffRankOf(staffRows.map(row => ({ id: String(row.id), name: typeof row.name === 'string' ? row.name : '', category: row.category, display_order: row.display_order }))),
+      flagCounts: {
+        lead: staffRows.filter(row => row.can_lead === true).length,
+        open: staffRows.filter(row => row.can_open === true).length,
+        close: staffRows.filter(row => row.can_close === true).length,
+      },
     }
   })
 }

@@ -38,10 +38,15 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (val
  * ルール設定: the store's labor-time and on-site rules. The generator starts
  * using them in later steps; until then they are only stored and shown.
  */
-export default function LaborRulesPanel({ storeId, initial, daysInMonth, onSaved }: {
+/** Fewer marked people than this cannot cover every day (days off, holidays). */
+const MIN_MARKED = 2
+
+export default function LaborRulesPanel({ storeId, initial, daysInMonth, flagCounts, onSaved }: {
   storeId: string
   initial: LaborRules
   daysInMonth: number
+  /** Staff marked 責任者 / 開店 / 締め on the roster. */
+  flagCounts: { lead: number; open: number; close: number } | null
   onSaved: (rules: LaborRules) => void
 }) {
   const [rules, setRules] = useState(initial)
@@ -115,6 +120,20 @@ export default function LaborRulesPanel({ storeId, initial, daysInMonth, onSaved
       <Row label="責任者・開店・締め" note="名簿の「責任者」「開店」「締め」を使う">
         <Toggle checked={rules.checkLead} onChange={value => set('checkLead', value)} label="責任者がいない時間を作らない" />
         <Toggle checked={rules.checkOpenClose} onChange={value => set('checkOpenClose', value)} label="開店・締めの担当を必ず置く" />
+        {flagCounts && (
+          <ul className="w-full space-y-0.5 text-xs">
+            {rules.checkLead && flagCounts.lead < MIN_MARKED && (
+              <li className="font-bold text-red-700">{flagCounts.lead === 0 ? '責任者ができる人が名簿にいません。' : `責任者ができる人が${flagCounts.lead}人しかいません。`}名簿で「責任者」に印を付けてください。</li>
+            )}
+            {rules.checkOpenClose && flagCounts.open < MIN_MARKED && (
+              <li className="font-bold text-red-700">{flagCounts.open === 0 ? '開店ができる人が名簿にいません。' : `開店ができる人が${flagCounts.open}人しかいません。`}名簿で「開店」に印を付けてください。</li>
+            )}
+            {rules.checkOpenClose && flagCounts.close < MIN_MARKED && (
+              <li className="font-bold text-red-700">{flagCounts.close === 0 ? '締めができる人が名簿にいません。' : `締めができる人が${flagCounts.close}人しかいません。`}名簿で「締め」に印を付けてください。</li>
+            )}
+            <li className="text-slate-500">名簿の印：責任者 {flagCounts.lead}人・開店 {flagCounts.open}人・締め {flagCounts.close}人</li>
+          </ul>
+        )}
       </Row>
       <Row label="新人だけの時間帯" note="このランク以上が1人もいない時間">
         <select aria-label="ランクの下限" value={rules.noviceRankFloor} onChange={event => set('noviceRankFloor', event.target.value === 'A' ? 'A' : event.target.value === 'C' ? 'C' : 'B')} className={selectClass}>
