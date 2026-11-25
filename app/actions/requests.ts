@@ -14,7 +14,8 @@ import { UserFacingError, check, runAction, toRow, toRows } from '@/lib/server/a
 import { type UsualAvailability, usualAvailabilityOf } from '@/lib/usual-availability'
 import { type StaffCategory, isStaffCategory, sortStaff } from '@/lib/staff-order'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
-import { requireSession } from '@/lib/server/dal'
+import { requireAdmin, requireSession } from '@/lib/server/dal'
+import { deadlineDayOf, isDeadlineDay, requestDeadlineDate } from '@/lib/request-deadline'
 import { CLEARED_ANALYSIS, type ExistingDayRequest, planMonthRequestSave } from '@/lib/server/request-save-plan'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { assert, isDateKey, isMonthStart, isRecord, isShortText, nextMonthStart, nextMonthStartInJapan } from '@/lib/server/validation'
@@ -52,6 +53,11 @@ export type RequestsPageData = {
   /** The logged-in staff member's usual availability, shown faintly on days without a request. */
   usual: UsualAvailability
   hours: BusinessHours
+  /** 提出期限 (YYYY-MM-DD, display only) and the store's 前月〇日 setting (22 when unset). */
+  deadline: string
+  deadlineDay: number
+  /** イベント row: date → note. */
+  events: Record<string, string>
 }
 
 /**
@@ -64,17 +70,23 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
     const session = await requireSession(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
-    const [staffResult, requestResult, hours, meResult] = await Promise.all([
+    const [staffResult, requestResult, hours, meResult, storeResult, eventResult] = await Promise.all([
       db.from('staff').select('id, name, is_employee, category, display_order').eq('store_id', storeId),
       db.from('shift_requests').select(REQUEST_COLUMNS)
         .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
       getBusinessHours(storeId),
       db.from('staff').select('weekly_availability, work_start_1, work_end_1, work_start_2, work_end_2')
         .eq('id', session.id).eq('store_id', storeId).maybeSingle(),
+      db.from('stores').select('request_deadline_day').eq('store_id', storeId).maybeSingle(),
+      db.from('store_day_events').select('date, note')
+        .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
     ])
     check(staffResult.error)
     check(requestResult.error)
     check(meResult.error)
+    check(storeResult.error)
+    check(eventResult.error)
+    const deadlineDay = deadlineDayOf(toRow(storeResult.data)?.request_deadline_day)
     const requests = toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) }))
     return {
       month: monthStart,
@@ -90,7 +102,45 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
         .map(request => ({ date: request.date, memo: request.memo, request: request.request })),
       usual: usualAvailabilityOf(toRow(meResult.data)),
       hours,
+      deadline: requestDeadlineDate(monthStart, deadlineDay),
+      deadlineDay,
+      events: Object.fromEntries(toRows(eventResult.data).flatMap(row =>
+        typeof row.note === 'string' && row.note ? [[String(row.date), row.note]] : [])),
     }
+  })
+}
+
+const MAX_EVENT_LENGTH = 100
+
+/** 提出期限 setting: requests are due on this day of the previous month (display only). Admin only. */
+export async function saveRequestDeadlineDay(storeId: string, day: number): Promise<ActionResult<number>> {
+  return runAction('saveRequestDeadlineDay', async () => {
+    await requireAdmin(storeId)
+    assert(isDeadlineDay(day), '1〜31日の中から選んでください。')
+    const { error } = await getAdminClient().from('stores').update({ request_deadline_day: day }).eq('store_id', storeId)
+    check(error)
+    return day
+  })
+}
+
+/** イベント row: sets (or, with an empty note, deletes) the store's note for one date. Admin only. */
+export async function saveDayEvent(storeId: string, date: string, note: string): Promise<ActionResult<string>> {
+  return runAction('saveDayEvent', async () => {
+    await requireAdmin(storeId)
+    const tooLong = `イベントは${MAX_EVENT_LENGTH}文字以内で入力してください。`
+    assert(isDateKey(date) && isShortText(note, MAX_EVENT_LENGTH * 2), tooLong)
+    const trimmed = note.trim()
+    assert(trimmed.length <= MAX_EVENT_LENGTH, tooLong)
+    const db = getAdminClient()
+    if (!trimmed) {
+      const { error } = await db.from('store_day_events').delete().eq('store_id', storeId).eq('date', date)
+      check(error)
+      return ''
+    }
+    const { error } = await db.from('store_day_events')
+      .upsert({ store_id: storeId, date, note: trimmed, updated_at: new Date().toISOString() }, { onConflict: 'store_id,date' })
+    check(error)
+    return trimmed
   })
 }
 

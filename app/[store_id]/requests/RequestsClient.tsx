@@ -8,8 +8,11 @@ import {
   type RequestsPageData,
   type StoreDayRequestView,
   getRequestsPageMonth,
+  saveDayEvent,
   saveMyMonthRequests,
+  saveRequestDeadlineDay,
 } from '@/app/actions/requests'
+import { DEFAULT_REQUEST_DEADLINE_DAY, formatDeadline, requestDeadlineDate } from '@/lib/request-deadline'
 import { unwrap } from '@/lib/action-result'
 import { type BusinessHours, type DayRequest, DEFAULT_BUSINESS_HOURS, formatDayRequest, timeToMinutes } from '@/lib/day-request'
 import { getHolidayName, isHoliday } from '@/lib/holidays'
@@ -95,11 +98,19 @@ const monthDate = (monthStart: string) => {
 export default function RequestsClient({ initialMonth, initial }: { initialMonth: string; initial: RequestsPageData | null }) {
   const params = useParams()
   const storeId = params.store_id as string
-  const { currentStaff } = useAdmin()
+  const { currentStaff, isAdmin } = useAdmin()
   const [staff, setStaff] = useState<RequestStaff[]>(() => sortStaff(initial?.staff ?? []))
   const selectedStaff = currentStaff
   const [entries, setEntries] = useState<Record<string, DayEntry>>(() => toEntries(initial?.mine ?? []))
   const [hours, setHours] = useState<BusinessHours>(initial?.hours ?? DEFAULT_BUSINESS_HOURS)
+  /** 提出期限 (display only) and the store's 前月〇日 setting; イベント row of the month. */
+  const [deadline, setDeadline] = useState(initial?.deadline ?? '')
+  const [deadlineDay, setDeadlineDay] = useState(initial?.deadlineDay ?? DEFAULT_REQUEST_DEADLINE_DAY)
+  const [events, setEvents] = useState<Record<string, string>>(initial?.events ?? {})
+  const [isEditingDeadline, setIsEditingDeadline] = useState(false)
+  const [deadlineDraft, setDeadlineDraft] = useState(deadlineDay)
+  const [eventEditor, setEventEditor] = useState<{ date: string; note: string } | null>(null)
+  const [isSavingStoreInfo, setIsSavingStoreInfo] = useState(false)
   const [usual, setUsual] = useState<UsualAvailability>(() => initial?.usual ?? usualAvailabilityOf(null))
   /** One line under the calendar after a one-tap choice (休み / 終日OK) that differs from usual. */
   const [statusNote, setStatusNote] = useState('')
@@ -156,6 +167,9 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       setStaff(sortStaff(result.data.staff))
       setAllRequests(result.data.requests)
       setHours(result.data.hours)
+      setDeadline(result.data.deadline)
+      setDeadlineDay(result.data.deadlineDay)
+      setEvents(result.data.events)
       setUsual(result.data.usual)
       setEntries(toEntries(result.data.mine))
       setIsDirty(false)
@@ -348,6 +362,37 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
     saveAs(new Blob([buffer]), `${targetMonth}月休み希望_${storeId}.xlsx`)
   }
 
+  const saveDeadlineDay = async () => {
+    setIsSavingStoreInfo(true)
+    const result = await saveRequestDeadlineDay(storeId, deadlineDraft)
+    setIsSavingStoreInfo(false)
+    if (!result.ok) {
+      notify('提出期限を保存できませんでした: ' + result.error, 'error')
+      return
+    }
+    setDeadlineDay(result.data)
+    setDeadline(requestDeadlineDate(currentMonthStart, result.data))
+    setIsEditingDeadline(false)
+    notify(`提出期限を「前月${result.data}日」にしました。`)
+  }
+
+  const saveEvent = async (date: string, note: string) => {
+    setIsSavingStoreInfo(true)
+    const result = await saveDayEvent(storeId, date, note)
+    setIsSavingStoreInfo(false)
+    if (!result.ok) {
+      notify('イベントを保存できませんでした: ' + result.error, 'error')
+      return
+    }
+    setEvents(current => {
+      const next = { ...current }
+      if (result.data) next[date] = result.data
+      else delete next[date]
+      return next
+    })
+    setEventEditor(null)
+  }
+
   const changeMonth = (diff: number) => {
     setViewDate(new Date(targetYear, targetMonth - 1 + diff, 1))
     setMultiSelect(false)
@@ -377,6 +422,29 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
           <div className="min-w-0">
             <h1 className="text-2xl font-bold text-slate-900">{targetYear}年{targetMonth}月の希望</h1>
             <p className="mt-1 text-sm text-slate-600">{selectedStaff.name} さん</p>
+            {deadline && !isEditingDeadline && (
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-slate-600">
+                <span>提出期限 {formatDeadline(deadline)}</span>
+                {isAdmin && (
+                  <button type="button" onClick={() => { setDeadlineDraft(deadlineDay); setIsEditingDeadline(true) }}
+                    className="py-1 text-xs font-bold text-slate-600 underline underline-offset-4">変更</button>
+                )}
+              </p>
+            )}
+            {isAdmin && isEditingDeadline && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-1">前月
+                  <select value={deadlineDraft} onChange={event => setDeadlineDraft(Number(event.target.value))} disabled={isSavingStoreInfo}
+                    aria-label="提出期限（前月の日）" className="min-h-9 rounded-md border border-slate-300 bg-white px-1.5 text-sm">
+                    {Array.from({ length: 31 }, (_, index) => index + 1).map(day => <option key={day} value={day}>{day}</option>)}
+                  </select>日
+                </label>
+                <button type="button" onClick={() => void saveDeadlineDay()} disabled={isSavingStoreInfo}
+                  className="min-h-9 rounded-md bg-[var(--primary)] px-3 text-xs font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300">保存</button>
+                <button type="button" onClick={() => setIsEditingDeadline(false)} disabled={isSavingStoreInfo}
+                  className="min-h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700">やめる</button>
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button type="button" onClick={() => changeMonth(-1)} aria-label="前の月" className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"><ChevronLeft size={22} /></button>
@@ -486,6 +554,29 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
         />
       )}
 
+      {eventEditor && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4" role="presentation"
+          onMouseDown={event => { if (event.target === event.currentTarget && !isSavingStoreInfo) setEventEditor(null) }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="event-dialog-title" className="w-full max-w-sm rounded-md border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 id="event-dialog-title" className="text-base font-bold text-slate-900">{formatDeadline(eventEditor.date)}のイベント</h2>
+            <p className="mt-1 text-xs text-slate-500">休み希望の表と Excel の「イベント」行に出ます。全員が見られます。</p>
+            <textarea value={eventEditor.note} maxLength={100} rows={3} autoFocus disabled={isSavingStoreInfo}
+              onChange={event => setEventEditor(current => current ? { ...current, note: event.target.value } : current)}
+              aria-label="イベント" className="mt-3 w-full resize-y rounded-md border border-slate-300 p-2 text-base text-slate-900 outline-none focus:border-slate-500" />
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              {events[eventEditor.date] && (
+                <button type="button" onClick={() => void saveEvent(eventEditor.date, '')} disabled={isSavingStoreInfo}
+                  className="mr-auto min-h-11 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-red-700 hover:bg-slate-50">削除</button>
+              )}
+              <button type="button" onClick={() => setEventEditor(null)} disabled={isSavingStoreInfo}
+                className="min-h-11 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50">閉じる</button>
+              <button type="button" onClick={() => void saveEvent(eventEditor.date, eventEditor.note)} disabled={isSavingStoreInfo}
+                className="min-h-11 rounded-md bg-[var(--primary)] px-4 text-sm font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300">保存</button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <section className="mt-8 border-t border-slate-200 pt-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -513,9 +604,28 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
                     : dateKind === 'saturday'
                       ? 'bg-blue-50/40 text-blue-600'
                       : 'bg-slate-50 text-slate-600'
-                  return <th key={dateStr} title={getHolidayName(dateStr) ?? undefined} className={`w-9 min-w-[36px] border border-slate-200 px-1 py-2 text-center font-semibold ${headerClass}`}>{day}</th>
+                  return (
+                    <th key={dateStr} title={getHolidayName(dateStr) ?? undefined} className={`w-9 min-w-[36px] border border-slate-200 p-0 text-center font-semibold ${headerClass}`}>
+                      {isAdmin
+                        ? <button type="button" onClick={() => setEventEditor({ date: dateStr, note: events[dateStr] ?? '' })} aria-label={`${targetMonth}月${day}日のイベントを入力`} className="block w-full px-1 py-2 underline decoration-dotted underline-offset-2 hover:bg-slate-100">{day}</button>
+                        : <span className="block px-1 py-2">{day}</span>}
+                    </th>
+                  )
                 })}
                 <th className="w-[76px] min-w-[76px] border border-slate-200 bg-slate-50 px-2 py-2 text-right font-semibold text-slate-700">休み日数</th>
+              </tr>
+              <tr>
+                <th scope="row" className="sticky left-0 z-20 border border-slate-200 bg-slate-50 px-2 py-1 text-left font-semibold text-slate-600">イベント</th>
+                {daysArray.map(day => {
+                  const dateStr = dateKey(day)
+                  const note = events[dateStr]
+                  return (
+                    <td key={dateStr} title={note} className="w-9 min-w-[36px] max-w-[36px] border border-slate-200 bg-white px-0.5 py-1 text-center align-top text-[9px] font-medium leading-tight text-slate-700">
+                      <span className="line-clamp-3 break-all">{note ?? ''}</span>
+                    </td>
+                  )
+                })}
+                <td className="border border-slate-200 bg-slate-50" />
               </tr>
             </thead>
             <tbody>
