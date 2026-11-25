@@ -194,3 +194,29 @@ select r as role,
        has_column_privilege(r, 'public.stores', 'request_deadline_day', 'UPDATE') as stores_deadline_update,
        (select relrowsecurity from pg_class where oid = 'public.store_day_events'::regclass) as events_rls
   from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+-- 13) Migration H (labor rules, productivity). AFTER:
+--     a) new columns exist (expected 7 staff + 15 stores + 2 generation_settings rows).
+select table_name, count(*) as new_columns
+  from information_schema.columns
+ where table_schema = 'public'
+   and ((table_name = 'staff' and column_name in ('is_minor', 'flags_confirmed_at', 'can_lead', 'can_open', 'can_close', 'weekly_hour_cap', 'monthly_hour_cap'))
+     or (table_name = 'stores' and column_name in ('labor_time_mode', 'daily_max_hours', 'weekly_max_hours', 'min_shift_hours', 'rest_interval_hours',
+          'late_night_start', 'late_night_end', 'week_start_day', 'check_lead', 'check_open_close', 'novice_rank_floor', 'novice_rule',
+          'apply_weekly_20h_line', 'target_sales_per_labor_hour', 'sales_offset_hours'))
+     or (table_name = 'generation_settings' and column_name in ('expected_sales', 'required_curve')))
+ group by table_name order by table_name;
+
+--     b) permissions (expected: service_role all true, anon / authenticated all false) and RLS on the new table.
+select r as role,
+       has_column_privilege(r, 'public.staff', 'can_lead', 'UPDATE') as staff_flags_update,
+       has_column_privilege(r, 'public.stores', 'labor_time_mode', 'UPDATE') as stores_rules_update,
+       has_column_privilege(r, 'public.generation_settings', 'required_curve', 'UPDATE') as settings_curve_update,
+       has_table_privilege(r, 'public.store_hourly_sales', 'INSERT') as hourly_sales_insert,
+       (select relrowsecurity from pg_class where oid = 'public.store_hourly_sales'::regclass) as hourly_sales_rls
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+--     c) starting values of the flags (all rows 「未確認」 until the manager confirms them).
+select store_id, count(*) as staff, count(*) filter (where can_lead) as can_lead, count(*) filter (where can_open) as can_open,
+       count(*) filter (where can_close) as can_close, count(*) filter (where flags_confirmed_at is null) as unconfirmed
+  from public.staff group by store_id order by store_id;
