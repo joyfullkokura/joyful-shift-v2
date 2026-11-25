@@ -96,7 +96,10 @@ export default function HourlySalesPanel({ storeId, openHour, closeHour, year, o
         const values = Array.isArray(row.values) ? row.values.slice(1) : []
         rows.push(values.map(cellValue))
       })
-      const averages = averageHourlySales(parsePosHourlyReport(rows, year), isWeekendOrHoliday)
+      const today = new Date().toISOString().slice(0, 10)
+      let parsedDays = parsePosHourlyReport(rows, year)
+      if (parsedDays.length > 0 && parsedDays[0].date > today) parsedDays = parsePosHourlyReport(rows, year - 1)
+      const averages = averageHourlySales(parsedDays, isWeekendOrHoliday)
       if (averages.wd.days + averages.we.days === 0) throw new Error('「時間別売上実績表」の形式を読み取れませんでした（日付・売上・客数の行と、時間の列が必要です）。')
       const label = (type: DayType) => {
         const part = averages[type]

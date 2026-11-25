@@ -3,7 +3,8 @@
 // averaging it per day type, and the people the sales would justify. Pure.
 
 export type HourValues = Record<number, number>
-export type PosDay = { date: string; sales: HourValues; customers: HourValues }
+/** weekdayLabel: the report's 曜日 column (月…日, or 祝 on holidays) when present. */
+export type PosDay = { date: string; sales: HourValues; customers: HourValues; weekdayLabel?: string }
 export type HourlyAverage = { hour: number; sales: number; customers: number | null }
 
 type Cell = unknown
@@ -56,8 +57,8 @@ export const dateOfCell = (value: Cell, fallbackYear: number): string | null => 
 
 /**
  * Reads the report from its rows (as cell values). The header row is the first
- * row with at least 3 hour columns. Each following row is 売上 / 客数 / 客単価
- * (label in one of the first columns); the date stays until the next date cell.
+ * row with at least 3 hour columns (15時 … 24時, 1時 … 14時; 24時 = 0). Amounts are yen
+ * (the header says 千円, but the figures are yen).
  */
 export const parsePosHourlyReport = (rows: Cell[][], fallbackYear: number): PosDay[] => {
   const headerIndex = rows.findIndex(row => row.filter(cell => hourOfHeader(cell) !== null).length >= 3)
@@ -67,24 +68,59 @@ export const parsePosHourlyReport = (rows: Cell[][], fallbackYear: number): PosD
     return hour === null ? [] : [{ column, hour }]
   })
   const firstHourColumn = Math.min(...hourColumns.map(item => item.column))
-  const days = new Map<string, PosDay>()
-  let currentDate: string | null = null
-
-  for (const row of rows.slice(headerIndex + 1)) {
-    const leading = row.slice(0, firstHourColumn)
-    const date = leading.map(cell => dateOfCell(cell, fallbackYear)).find(Boolean) ?? null
-    if (date) currentDate = date
-    const label = leading.map(text).join(' ')
-    if (/合計|総計/.test(label)) continue
-    const kind = /客単価/.test(label) ? null : /客数/.test(label) ? 'customers' : /売上/.test(label) ? 'sales' : null
-    if (!kind || !currentDate) continue
-    const day = days.get(currentDate) ?? { date: currentDate, sales: {}, customers: {} }
-    for (const { column, hour } of hourColumns) {
-      const value = numberOf(row[column])
-      if (value !== null) day[kind][hour] = (day[kind][hour] ?? 0) + value
-    }
-    days.set(currentDate, day)
+  const body = rows.slice(headerIndex + 1)
+  const leadingOf = (row: Cell[] | undefined) => (row ?? []).slice(0, firstHourColumn)
+  const labelOf = (row: Cell[] | undefined) => leadingOf(row).map(text).join(' ')
+  const kindOf = (row: Cell[] | undefined): 'sales' | 'customers' | null => {
+    const label = labelOf(row)
+    if (/客単価/.test(label)) return null
+    if (/客数/.test(label)) return 'customers'
+    if (/売上/.test(label)) return 'sales'
+    return null
   }
+  // Dates written without a year (12/27 … 1/4) roll over into the next year.
+  let year = fallbackYear
+  let lastMonth: number | null = null
+  const dateOf = (row: Cell[]) => {
+    for (const cell of leadingOf(row)) {
+      const label = text(cell)
+      const short = !(cell instanceof Date) && typeof cell !== 'number' && !/\d{4}/.test(label) && /^\d{1,2}\s*[/月]\s*\d{1,2}/.test(label)
+      const date = dateOfCell(cell, year)
+      if (!date) continue
+      const month = Number(date.slice(5, 7))
+      if (short && lastMonth !== null && month < lastMonth - 6) {
+        year += 1
+        lastMonth = month
+        return dateOfCell(cell, year)
+      }
+      lastMonth = month
+      return date
+    }
+    return null
+  }
+
+  // A date (column A in the POS report) marks one day's block: the labelled rows
+  // right above and below it (売上 / 客数 / 客単価) belong to it. Average rows
+  // (【平日平均】…) and totals carry no date and are skipped.
+  const days = new Map<string, PosDay>()
+  body.forEach((row, index) => {
+    const date = dateOf(row)
+    if (!date) return
+    const day = days.get(date) ?? { date, sales: {}, customers: {} }
+    const weekday = leadingOf(row).map(text).find(label => /^[月火水木金土日祝]$/.test(label))
+    if (weekday) day.weekdayLabel = weekday
+    for (const neighbour of [index - 1, index, index + 1]) {
+      const candidate = body[neighbour]
+      if (!candidate || (neighbour !== index && dateOf(candidate) !== null)) continue
+      const kind = kindOf(candidate)
+      if (!kind) continue
+      for (const { column, hour } of hourColumns) {
+        const value = numberOf(candidate[column])
+        if (value !== null) day[kind][hour] = (day[kind][hour] ?? 0) + value
+      }
+    }
+    days.set(date, day)
+  })
   return [...days.values()].sort((left, right) => left.date.localeCompare(right.date))
 }
 
@@ -94,8 +130,11 @@ export const averageHourlySales = (
   isWeekendOrHoliday: (date: string) => boolean,
 ): Record<'wd' | 'we', { rows: HourlyAverage[]; days: number; from: string | null; to: string | null }> => {
   const build = (type: 'wd' | 'we') => {
-    const chosen = days.filter(day => (isWeekendOrHoliday(day.date) ? 'we' : 'wd') === type
-      && Object.values(day.sales).some(value => value > 0))
+    // The report's own 曜日 column wins (it says 祝 on holidays such as 12/27〜1/4).
+    const typeOf = (day: PosDay): 'wd' | 'we' => day.weekdayLabel
+      ? (/[土日祝]/.test(day.weekdayLabel) ? 'we' : 'wd')
+      : (isWeekendOrHoliday(day.date) ? 'we' : 'wd')
+    const chosen = days.filter(day => typeOf(day) === type && Object.values(day.sales).some(value => value > 0))
     const hours = [...new Set(chosen.flatMap(day => Object.keys(day.sales).map(Number)))].sort((left, right) => left - right)
     const rows = hours.map(hour => {
       const sales = chosen.reduce((total, day) => total + (day.sales[hour] ?? 0), 0) / (chosen.length || 1)

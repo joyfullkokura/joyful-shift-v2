@@ -20,27 +20,37 @@ describe('hourOfHeader / dateOfCell', () => {
   })
 })
 
-// The layout of the POS 「時間別売上実績表」: per date 売上 / 客数 / 客単価, hours as columns.
+// A made-up minimal sample in the layout of the POS 「時間別売上実績表」 (no real figures):
+// the date (column A) and 曜日 (column B, 祝 on holidays) are on the 客数 row, 売上 is the row
+// above and 客単価 the row below; hours run 15時 … 24時, 1時 … 14時; average rows close the table.
+const hoursHeader = ['15時', '16時', '17時', '18時', '19時', '20時', '21時', '22時', '23時', '24時', '1時', '2時', '3時', '4時', '5時', '6時', '7時', '8時', '9時', '10時', '11時', '12時', '13時', '14時']
+const values = (byHour: Record<number, number>) => hoursHeader.map(label => byHour[Number(label.replace('時', '')) % 24] ?? 0)
+const block = (date: string, weekday: string, sales: Record<number, number>, customers: Record<number, number>) => [
+  ['', '', '売上', ...values(sales)],
+  [date, weekday, '客数', ...values(customers)],
+  ['', '', '客単価', ...values({})],
+]
 const report = [
-  ['時間別売上実績表', '', '', '', '', ''],
-  ['日付', '項目', '10時', '11時', '12時', '合計'],
-  ['2026/11/02(月)', '売上', '10,000', '20,000', '30,000', '60,000'],
-  ['', '客数', 5, 10, 15, 30],
-  ['', '客単価', 2000, 2000, 2000, 2000],
-  ['2026/11/03(火)', '売上', 20000, 40000, 50000, 110000],
-  ['', '客数', 10, 20, 25, 55],
-  ['', '客単価', 2000, 2000, 2000, 2000],
-  ['2026/11/07(土)', '売上', 40000, 80000, 90000, 210000],
-  ['', '客数', 20, 40, 45, 105],
-  ['', '客単価', 2000, 2000, 2000, 2000],
-  ['合計', '売上', 70000, 140000, 170000, 380000],
+  ['時間別売上実績表', '', '売上単位：千円'],
+  ['日付', '曜日', '項目', ...hoursHeader],
+  ...block('12/25', '金', { 11: 10_000, 12: 20_000, 18: 30_000 }, { 11: 5, 12: 10, 18: 12 }),
+  ...block('12/28', '祝', { 11: 40_000, 12: 80_000 }, { 11: 20, 12: 40 }),
+  ...block('12/30', '水', { 11: 20_000, 12: 40_000, 18: 50_000, 0: 2_000 }, { 11: 10, 12: 20, 18: 20, 0: 1 }),
+  ...block('1/2', '土', { 11: 60_000 }, { 11: 30 }),
+  ['', '', '売上', ...values({ 11: 15_000 })],
+  ['【平日平均】', '', '客数', ...values({ 11: 7 })],
+  ['', '', '客単価', ...values({})],
+  ['', '', '売上', ...values({ 11: 50_000 })],
+  ['【休日平均】', '', '客数', ...values({ 11: 25 })],
+  ['', '', '客単価', ...values({})],
 ]
 
 describe('parsePosHourlyReport', () => {
-  it('reads sales and customers per date and hour, skipping totals and 客単価', () => {
+  it('reads each day from the 売上 row above and the 客数 row of its date, skipping 客単価 and average rows', () => {
     const days = parsePosHourlyReport(report, 2026)
-    expect(days.map(day => day.date)).toEqual(['2026-11-02', '2026-11-03', '2026-11-07'])
-    expect(days[0]).toEqual({ date: '2026-11-02', sales: { 10: 10000, 11: 20000, 12: 30000 }, customers: { 10: 5, 11: 10, 12: 15 } })
+    expect(days.map(day => day.date)).toEqual(['2026-12-25', '2026-12-28', '2026-12-30', '2027-01-02'])
+    expect(days[0]).toEqual({ date: '2026-12-25', weekdayLabel: '金', sales: { ...zeroes(), 11: 10_000, 12: 20_000, 18: 30_000 }, customers: { ...zeroes(), 11: 5, 12: 10, 18: 12 } })
+    expect(days[2].sales[0]).toBe(2_000) // 24時 is hour 0 of the same business day
   })
 
   it('returns nothing without a header of hours', () => {
@@ -48,19 +58,21 @@ describe('parsePosHourlyReport', () => {
   })
 })
 
-describe('averageHourlySales / peopleFromSales', () => {
-  const weekend = (date: string) => date === '2026-11-07'
+function zeroes() {
+  return Object.fromEntries(hoursHeader.map(label => [Number(label.replace('時', '')) % 24, 0])) as Record<number, number>
+}
 
-  it('averages weekdays and weekends separately', () => {
-    const result = averageHourlySales(parsePosHourlyReport(report, 2026), weekend)
-    expect(result.wd.days).toBe(2)
-    expect(result.wd.rows).toEqual([
-      { hour: 10, sales: 15000, customers: 7.5 },
-      { hour: 11, sales: 30000, customers: 15 },
-      { hour: 12, sales: 40000, customers: 20 },
-    ])
-    expect(result.we.days).toBe(1)
-    expect(result.wd.from).toBe('2026-11-02')
+describe('averageHourlySales / peopleFromSales', () => {
+  const noCalendar = () => false
+
+  it('uses the report 曜日 column (土 / 日 / 祝 = 土日祝) and averages each type', () => {
+    const result = averageHourlySales(parsePosHourlyReport(report, 2026), noCalendar)
+    expect(result.wd.days).toBe(2) // 12/25 金, 12/30 水
+    expect(result.we.days).toBe(2) // 12/28 祝, 1/2 土
+    expect(result.wd.rows.find(row => row.hour === 11)).toEqual({ hour: 11, sales: 15_000, customers: 7.5 })
+    expect(result.we.rows.find(row => row.hour === 11)).toEqual({ hour: 11, sales: 50_000, customers: 25 })
+    expect(result.we.from).toBe('2026-12-28')
+    expect(result.we.to).toBe('2027-01-02')
   })
 
   it('moves sales one hour earlier and divides by the target', () => {
