@@ -30,6 +30,21 @@ const EDITABLE_FIELDS: Record<string, (value: unknown) => unknown> = {
   work_start_2: value => (value === null || value === '' ? null : isTimeText(value) ? value : undefined),
   work_end_2: value => (value === null || value === '' ? null : isTimeText(value) ? value : undefined),
   weekly_availability: value => (value === null ? null : parseWeeklyAvailability(value) ?? undefined),
+  is_minor: value => (typeof value === 'boolean' ? value : undefined),
+  can_lead: value => (typeof value === 'boolean' ? value : undefined),
+  can_open: value => (typeof value === 'boolean' ? value : undefined),
+  can_close: value => (typeof value === 'boolean' ? value : undefined),
+  weekly_hour_cap: value => hourCap(value, 168),
+  monthly_hour_cap: value => hourCap(value, 744),
+  // true = the manager confirmed 18歳未満 and the flags now; false = back to 「未確認」.
+  flags_confirmed: value => (typeof value === 'boolean' ? value : undefined),
+}
+
+/** A personal hour cap in 0.5h steps, or null for none. */
+function hourCap(value: unknown, max: number) {
+  if (value === null || value === '') return null
+  const hours = typeof value === 'string' ? Number(value) : value
+  return typeof hours === 'number' && Number.isFinite(hours) && hours >= 0 && hours <= max && Number.isInteger(hours * 2) ? hours : undefined
 }
 
 /**
@@ -46,6 +61,10 @@ const toStaffUpdate = (input: Record<string, unknown>, hours: BusinessHours): Da
   }
   if ('weekly_availability' in update) {
     Object.assign(update, weeklyAvailabilityColumns(parseWeeklyAvailability(update.weekly_availability), hours))
+  }
+  if ('flags_confirmed' in update) {
+    update.flags_confirmed_at = update.flags_confirmed ? new Date().toISOString() : null
+    delete update.flags_confirmed
   }
   return update
 }

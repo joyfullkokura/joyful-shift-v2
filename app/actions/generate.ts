@@ -4,6 +4,7 @@ import type { ActionResult, DataRow } from '@/lib/action-result'
 import { type DayRequest, type DayRequestKind, businessHoursOf, convertLegacyRequest, toDayRequest } from '@/lib/day-request'
 import { STAFF_SECRET_COLUMNS, STORE_SECRET_COLUMNS, check, omit, runAction, toRow, toRows } from '@/lib/server/action'
 import { requireAdmin } from '@/lib/server/dal'
+import { parseRequiredCurve } from '@/lib/required-curve'
 import { type StaffRank, staffRankOf } from '@/lib/staff-order'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { assert, isId, isJsonWithin, isMonthStart, isRecord, isShortText, nextMonthStart } from '@/lib/server/validation'
@@ -16,7 +17,7 @@ const MAX_SETTINGS_BYTES = 200_000
 /** An old memo-only request the rules could not read: the manager decides on the generate screen. */
 export type RequestReview = { id: string; staff_id: string; staff_name: string; date: string; memo: string }
 
-export type GenerationInputs = { staff: DataRow[]; requests: DataRow[]; reviews: RequestReview[] }
+export type GenerationInputs = { staff: DataRow[]; requests: DataRow[]; reviews: RequestReview[]; previousMonth: PreviousMonthTail }
 
 const CONVERSION_CONCURRENCY = 5
 
@@ -114,7 +115,15 @@ export async function getGenerateContext(storeId: string, monthStart: string): P
   })
 }
 
-export type GenerationSettingInput = { config_type: string; counts: unknown; slots: unknown }
+export type GenerationSettingInput = {
+  config_type: string
+  counts: unknown
+  slots: unknown
+  /** Expected sales of one such day (yen); null = not set. */
+  expected_sales?: number | null
+  /** Required staff per job and hour; null = not set. */
+  required_curve?: unknown
+}
 
 /** Saves this month's settings and removes special-day settings that were deselected. */
 export async function saveGenerationSettings(storeId: string, monthStart: string, entries: GenerationSettingInput[]): Promise<ActionResult<null>> {
@@ -125,7 +134,15 @@ export async function saveGenerationSettings(storeId: string, monthStart: string
     const payload = entries.map(entry => {
       assert(isRecord(entry) && isShortText(entry.config_type, 40) && entry.config_type.length > 0)
       assert(isRecord(entry.counts) && isRecord(entry.slots))
-      return { store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: entry.slots }
+      const expectedSales = entry.expected_sales ?? null
+      assert(expectedSales === null || (typeof expectedSales === 'number' && Number.isInteger(expectedSales) && expectedSales >= 0 && expectedSales <= 100_000_000),
+        '予想売上は0〜1億円の整数で入力してください。')
+      const curve = entry.required_curve == null ? null : parseRequiredCurve(entry.required_curve)
+      assert(entry.required_curve == null || curve, '必要人数の設定を確認してください。')
+      return {
+        store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: entry.slots,
+        expected_sales: expectedSales, required_curve: curve,
+      }
     })
     const keep = new Set(payload.map(row => row.config_type))
     const db = getAdminClient()
@@ -152,9 +169,10 @@ export async function getGenerationInputs(storeId: string, monthStart: string): 
     await requireAdmin(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
-    const [staffResult, { requests, pending }] = await Promise.all([
+    const [staffResult, { requests, pending }, previousMonth] = await Promise.all([
       db.from('staff').select('*').eq('store_id', storeId).order('name', { ascending: true }),
       loadMonthRequests(storeId, monthStart),
+      loadPreviousMonthTail(storeId, monthStart),
     ])
     check(staffResult.error)
     const staff = toRows(staffResult.data)
@@ -162,8 +180,51 @@ export async function getGenerationInputs(storeId: string, monthStart: string): 
       staff: staff.map(row => omit(row, STAFF_SECRET_COLUMNS)),
       requests,
       reviews: toReviews(pending, staff),
+      previousMonth,
     }
   })
+}
+
+/**
+ * The last 7 days of the previous month (for the weekly limit and the rest
+ * interval across the month boundary): the confirmed schedule, else the draft,
+ * else none (the screen warns).
+ */
+export type PreviousMonthTail = {
+  source: 'confirmed' | 'draft' | 'none'
+  staff: { id: string; shifts: Record<string, string> }[]
+}
+
+const previousMonthStart = (monthStart: string) => {
+  const [year, month] = monthStart.split('-').map(Number)
+  return month === 1 ? `${year - 1}-12-01` : `${year}-${String(month - 1).padStart(2, '0')}-01`
+}
+
+const loadPreviousMonthTail = async (storeId: string, monthStart: string): Promise<PreviousMonthTail> => {
+  const { data, error } = await getAdminClient().from('monthly_shifts').select('status, schedule_data')
+    .eq('store_id', storeId).eq('target_month', previousMonthStart(monthStart))
+  check(error)
+  const rows = toRows(data)
+  const row = rows.find(item => item.status === 'confirmed') ?? rows.find(item => item.status === 'draft')
+  const schedule = toRow(row?.schedule_data)
+  if (!row || !schedule || !Array.isArray(schedule.staff)) return { source: 'none', staff: [] }
+  const lastDay = new Date(`${monthStart}T00:00:00`)
+  lastDay.setDate(0)
+  const from = new Date(lastDay)
+  from.setDate(lastDay.getDate() - 6)
+  const fromKey = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`
+  return {
+    source: row.status === 'confirmed' ? 'confirmed' : 'draft',
+    staff: (schedule.staff as unknown[]).flatMap(item => {
+      const person = toRow(item)
+      const shifts = toRow(person?.shifts)
+      if (!person || !shifts) return []
+      return [{
+        id: String(person.id),
+        shifts: Object.fromEntries(Object.entries(shifts).filter(([date, label]) => date >= fromKey && date < monthStart && typeof label === 'string')) as Record<string, string>,
+      }]
+    }),
+  }
 }
 
 /** The manager decides what an unreadable old memo means. The memo itself is kept. */
