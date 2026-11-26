@@ -56,7 +56,10 @@ export type ScoreBreakdown = {
 }
 
 export const scoreCandidate = (factors: CandidateFactors): ScoreBreakdown => {
-  const targetRate = (factors.weeklyTargetDays * 4) / factors.daysInMonth
+  // Same basis as the 超過ブレーキ below (days per week ÷ 7). It used to be
+  // weekly days × 4 ÷ days in month, which is lower in 29-31 day months, so
+  // the attendance target and the brake disagreed.
+  const targetRate = factors.weeklyTargetDays / 7
   const previousDays = factors.day - 1
   const currentRate = previousDays > 0 ? factors.assignedDays / previousDays : 0
   const attendance = (targetRate - currentRate) * 100
