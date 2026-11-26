@@ -1,4 +1,5 @@
 import { DEFAULT_LABOR_RULES } from '@/lib/labor-rules'
+import { type CoverageGap, type NoviceRemoval, enforceCoverage } from './coverage'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { calculateScheduleAlerts } from './alerts'
 import { assignInitialSlots, type SlotDecision } from './assign'
@@ -52,7 +53,9 @@ export type GenerationDecisions = {
   /** First pass: every slot with all eligible candidates (best first) and their score breakdowns. */
   slots: SlotDecision[]
   /** Later passes, in the order they were applied. */
-  adjustments: Array<RelayAdjustment | EmployeeHoursAdjustment>
+  adjustments: Array<RelayAdjustment | EmployeeHoursAdjustment | NoviceRemoval>
+  /** Opening / closing / 責任者 / 新人だけ requirements the finished schedule still misses, per day. */
+  coverage: CoverageGap[]
   summary: {
     /** Slots fully uncovered after all passes (same as schedule.vacancyCount). */
     vacancyCount: number
@@ -75,6 +78,7 @@ export type ShiftPlan = {
  * 1. assignInitialSlots   - day by day, best-scoring staff per slot
  * 2. fillGapsWithRelays   - extend colleagues' shifts into uncovered parts of slots
  * 3. balanceEmployeeHours - move employees toward their monthly hour target
+ * 4. enforceCoverage      - hard novice rule; list missing opening / closing / 責任者 coverage
  */
 export const generateShiftPlan = (input: GeneratorInput): ShiftPlan => {
   const context = createContext(input)
@@ -83,6 +87,7 @@ export const generateShiftPlan = (input: GeneratorInput): ShiftPlan => {
   const { assignmentsByDate, decisions: slotDecisions } = assignInitialSlots(context)
   const relayAdjustments = fillGapsWithRelays(context, assignmentsByDate)
   const employeeAdjustments = balanceEmployeeHours(context, assignmentsByDate)
+  const { removals: noviceRemovals, gaps: coverageGaps } = enforceCoverage(context, assignmentsByDate)
 
   scheduleStaff.forEach(staff => {
     staff.assignedHours = actualHoursForShifts(staff.shifts)
@@ -117,7 +122,8 @@ export const generateShiftPlan = (input: GeneratorInput): ShiftPlan => {
     schedule,
     decisions: {
       slots: slotDecisions,
-      adjustments: [...relayAdjustments, ...employeeAdjustments],
+      adjustments: [...relayAdjustments, ...employeeAdjustments, ...noviceRemovals],
+      coverage: coverageGaps,
       summary: {
         vacancyCount: schedule.vacancyCount,
         skillAlertCount: schedule.alerts.filter(alert => alert.type === 'skill').length,

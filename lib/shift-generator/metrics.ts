@@ -16,6 +16,11 @@ export type EvaluatedStaff = {
   /** date → "HH:MM-HH:MM" (anything else = not working). */
   shifts: Record<string, string>
   assignedRoles?: Record<string, string>
+  /** For the coverage checks (④⑤⑥). */
+  rank?: string | null
+  canLead?: boolean
+  canOpen?: boolean
+  canClose?: boolean
 }
 
 export type EvaluationInput = {
@@ -32,6 +37,19 @@ export type EvaluationInput = {
   /** Day type (wd / we / special date) → expected sales of one such day. */
   expectedSales: Record<string, number | null | undefined>
   curves: Record<string, RequiredCurve | null | undefined>
+  /** Store hours (decimal, end may pass 24) for the 責任者 / opening / closing checks; null = skip them. */
+  storeHours?: { start: number; end: number } | null
+}
+
+/** One day's on-site coverage (only the checks the store turned on; 新人だけ always). */
+export type DayCoverageMetrics = { date: string; noLeadHours: number; noOpen: boolean; noClose: boolean; noviceOnlyHours: number }
+
+export type CoverageSummary = {
+  days: DayCoverageMetrics[]
+  noLeadHours: number
+  noOpenDays: number
+  noCloseDays: number
+  noviceOnlyHours: number
 }
 
 export type DayMetrics = {
@@ -74,6 +92,7 @@ export type ScheduleEvaluation = {
   /** Part-timers with a week above 20 paid hours. */
   partTimersOver20h: number
   violations: Violation[]
+  coverage: CoverageSummary
 }
 
 const LABEL = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/
@@ -288,6 +307,56 @@ export const evaluateSchedule = (input: EvaluationInput): ScheduleEvaluation => 
     employeeDaysOverDaily,
     partTimersOver20h,
     violations,
+    coverage: evaluateCoverage(input, dates),
+  }
+}
+
+const RANK_ORDER: Record<string, number> = { A: 3, B: 2, C: 1 }
+
+/**
+ * Coverage checked minute by minute from the shift labels (independent of the
+ * generator's coverage.ts): business minutes worked without a 責任者, days
+ * without an opener / closer, and minutes worked by novices only (part-timers
+ * below the rank floor; unset ranks count as B).
+ */
+export const evaluateCoverage = (input: EvaluationInput, dates: string[]): CoverageSummary => {
+  const { rules, storeHours } = input
+  const floor = RANK_ORDER[rules.noviceRankFloor]
+  const days: DayCoverageMetrics[] = []
+  for (const date of dates) {
+    const working = input.staff
+      .map(person => ({ person, range: shiftRange(person.shifts[date]) }))
+      .filter((item): item is { person: EvaluatedStaff; range: { start: number; end: number } } => item.range !== null)
+      .map(({ person, range }) => ({ person, from: Math.round(range.start * 60), to: Math.round(range.end * 60) }))
+    const day: DayCoverageMetrics = { date, noLeadHours: 0, noOpen: false, noClose: false, noviceOnlyHours: 0 }
+    if (working.length > 0) {
+      const open = storeHours ? Math.round(storeHours.start * 60) : null
+      const close = storeHours ? Math.round(storeHours.end * 60) : null
+      if (rules.checkOpenClose && open !== null && close !== null) {
+        day.noOpen = !working.some(item => item.person.canOpen === true && item.from <= open && item.to > open)
+        day.noClose = !working.some(item => item.person.canClose === true && item.to >= close && item.from < close)
+      }
+      const first = Math.min(...working.map(item => item.from))
+      const last = Math.max(...working.map(item => item.to))
+      let noLead = 0
+      let noviceOnly = 0
+      for (let minute = first; minute < last; minute++) {
+        const here = working.filter(item => item.from <= minute && item.to > minute)
+        if (here.length === 0) continue
+        if (rules.checkLead && open !== null && close !== null && minute >= open && minute < close && !here.some(item => item.person.canLead === true)) noLead++
+        if (here.every(item => !item.person.isEmployee && (RANK_ORDER[item.person.rank ?? ''] ?? 2) < floor)) noviceOnly++
+      }
+      day.noLeadHours = Math.round(noLead / 60 * 100) / 100
+      day.noviceOnlyHours = Math.round(noviceOnly / 60 * 100) / 100
+    }
+    days.push(day)
+  }
+  return {
+    days,
+    noLeadHours: round1(days.reduce((total, day) => total + day.noLeadHours, 0)),
+    noOpenDays: days.filter(day => day.noOpen).length,
+    noCloseDays: days.filter(day => day.noClose).length,
+    noviceOnlyHours: round1(days.reduce((total, day) => total + day.noviceOnlyHours, 0)),
   }
 }
 

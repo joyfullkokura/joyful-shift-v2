@@ -6,6 +6,7 @@ import { type ScheduleEvaluation, VIOLATION_LABELS, type ViolationKind } from '@
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const yen = (value: number | null) => (value === null ? '—' : `${value.toLocaleString('ja-JP')}円`)
 const hours = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}h`)
+const shortDate = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`
 
 function Verdict({ value, target }: { value: number | null; target: number }) {
   if (value === null) return <span className="text-slate-400">—</span>
@@ -38,7 +39,13 @@ export default function ScheduleMetricsPanel({ evaluation, capacity, target, sta
   for (const violation of evaluation.violations) byKind.set(violation.kind, [...(byKind.get(violation.kind) ?? []), violation])
   const hasHeatmap = evaluation.days.some(day => day.balanceByHour)
   const heatHours = [...new Set(evaluation.days.flatMap(day => Object.keys(day.balanceByHour ?? {}).map(Number)))].sort((left, right) => left - right)
-  const { month } = evaluation
+  const { month, coverage } = evaluation
+  const coverageItems = [
+    { label: '責任者がいない時間', total: hours(coverage.noLeadHours), dates: coverage.days.filter(day => day.noLeadHours > 0).map(day => day.date) },
+    { label: '開店の担当がいない日', total: `${coverage.noOpenDays}日`, dates: coverage.days.filter(day => day.noOpen).map(day => day.date) },
+    { label: '締めの担当がいない日', total: `${coverage.noCloseDays}日`, dates: coverage.days.filter(day => day.noClose).map(day => day.date) },
+    { label: '新人だけの時間', total: hours(coverage.noviceOnlyHours), dates: coverage.days.filter(day => day.noviceOnlyHours > 0).map(day => day.date) },
+  ].filter(item => item.dates.length > 0)
 
   return (
     <section aria-labelledby="metrics-title" className="space-y-4 rounded-md border border-slate-200 bg-white p-4">
@@ -92,6 +99,23 @@ export default function ScheduleMetricsPanel({ evaluation, capacity, target, sta
             </ul>
           )}
         <p className="mt-1 text-xs text-slate-500">自動作成はこれらのルールを超えないように作ります。手で直したシフトはここで確認できます。</p>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-bold text-slate-800">責任者・開店・締め・新人だけの時間</h3>
+        {coverageItems.length === 0
+          ? <p className="mt-1 text-sm text-slate-600">足りない時間・日はありません。</p>
+          : (
+            <ul className="mt-1 space-y-1 text-sm">
+              {coverageItems.map(item => (
+                <li key={item.label}>
+                  <span className="font-bold text-red-700">{item.label} {item.total}</span>
+                  <span className="ml-2 text-slate-600">{item.dates.slice(0, 6).map(shortDate).join('、')}{item.dates.length > 6 ? ` ほか${item.dates.length - 6}日` : ''}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        <p className="mt-1 text-xs text-slate-500">責任者・開店・締めは、店舗のルール設定でオンにしたときだけ確かめます。</p>
       </div>
 
       <details>

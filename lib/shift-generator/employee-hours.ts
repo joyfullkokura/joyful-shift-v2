@@ -10,6 +10,7 @@ import {
 } from './context'
 import { isUnavailableOn } from './requests'
 import { checkShift } from './constraints'
+import { dayCoverage, losesCoverage } from './coverage'
 import { actualHoursForShifts, calculateActualHours, fToT } from './time'
 import type { GeneratedStaffShift, StaffRecord } from './types'
 
@@ -59,15 +60,24 @@ const swapForLongerSlot = (
         || checkShift(context, staffIndexById.get(employee.id) ?? -1, dateStr, longerSlot.start, longerSlot.end)
         || checkShift(context, partTimeIndex, dateStr, employeeSlot.start, employeeSlot.end)
       ) continue
+      // Each takes the other's whole slot (the labels below), so the day's shifts follow the slots.
+      const swapped = dayData.shifts.map(shift => shift === employeeShift
+        ? { staffId: partTimeStaff.id, start: employeeSlot.start, end: employeeSlot.end }
+        : shift === partTimeShift ? { staffId: employee.id, start: longerSlot.start, end: longerSlot.end } : shift)
+      if (losesCoverage(dayCoverage(context, dayData.shifts), dayCoverage(context, swapped))) continue
 
       const partTimeRow = scheduleStaff[partTimeIndex]
       const employeeSkillSet = splitList(employee.skills)
       const partTimeSkillSet = splitList(partTimeStaff.skills)
       employeeShift.staffId = partTimeStaff.id
       employeeShift.skills = partTimeSkillSet
+      employeeShift.start = employeeSlot.start
+      employeeShift.end = employeeSlot.end
       employeeSlot.staffId = partTimeStaff.id
       partTimeShift.staffId = employee.id
       partTimeShift.skills = employeeSkillSet
+      partTimeShift.start = longerSlot.start
+      partTimeShift.end = longerSlot.end
       longerSlot.staffId = employee.id
       employeeRow.shifts[dateStr] = `${fToT(longerSlot.start)}-${fToT(longerSlot.end)}`
       partTimeRow.shifts[dateStr] = `${fToT(employeeSlot.start)}-${fToT(employeeSlot.end)}`
@@ -114,8 +124,12 @@ const takeOverPartTimeSlot = (
       if (checkShift(context, staffIndexById.get(employee.id) ?? -1, dateStr, slot.start, slot.end)) continue
       const shift = dayData.shifts.find(item => item.slotKey === `${slot.group}_${slot.slotIndex}`)
       if (!shift) continue
+      const replaced = dayData.shifts.map(item => item === shift ? { staffId: employee.id, start: slot.start, end: slot.end } : item)
+      if (losesCoverage(dayCoverage(context, dayData.shifts), dayCoverage(context, replaced))) continue
       shift.staffId = employee.id
       shift.skills = splitList(employee.skills)
+      shift.start = slot.start
+      shift.end = slot.end
       slot.staffId = employee.id
       dayData.assignedStaffIds.delete(partTimeStaff.id)
       dayData.assignedStaffIds.add(employee.id)

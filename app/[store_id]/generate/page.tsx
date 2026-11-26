@@ -44,6 +44,7 @@ import {
   jobForGroup,
   shiftHoursFromLabel,
   tToF,
+  toTimeRange,
   type GeneratedSchedule,
   type GeneratorStore,
   type ShiftRequest,
@@ -333,14 +334,19 @@ export default function GeneratePage() {
   // Evaluation of the schedule on screen (generated or a draft being edited). Read-only.
   const evaluation = (() => {
     if (!generatedSchedule) return null
-    const minors = new Set((generationExtras?.staff ?? []).filter(person => (person as { is_minor?: unknown }).is_minor === true).map(person => person.id))
+    const recordById = new Map((generationExtras?.staff ?? []).map(person => [person.id, person]))
     return evaluateSchedule({
       targetYear,
       targetMonth,
       staff: generatedSchedule.staff.map(person => ({
-        id: person.id, name: person.name, isEmployee: person.isEmployee, isMinor: minors.has(person.id),
+        id: person.id, name: person.name, isEmployee: person.isEmployee, isMinor: recordById.get(person.id)?.is_minor === true,
         mainJob: person.mainJob, shifts: person.shifts, assignedRoles: person.assignedRoles,
+        rank: recordById.get(person.id)?.rank ?? null,
+        canLead: recordById.get(person.id)?.can_lead === true,
+        canOpen: recordById.get(person.id)?.can_open === true,
+        canClose: recordById.get(person.id)?.can_close === true,
       })),
+      storeHours: toTimeRange(storeInfo?.open_time, storeInfo?.close_time),
       previousMonth: generationExtras?.previousMonth.staff,
       rules: laborRules,
       selectedSpecialDays,

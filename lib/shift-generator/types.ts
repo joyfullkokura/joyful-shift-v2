@@ -67,6 +67,10 @@ export type StaffRecord = {
   weekly_availability?: unknown
   /** Under 18: never placed in the late-night window. */
   is_minor?: boolean | null
+  /** Can be the 時間帯責任者 / open / close the store (used when the store turns the checks on). */
+  can_lead?: boolean | null
+  can_open?: boolean | null
+  can_close?: boolean | null
 }
 
 export type ShiftRequest = {

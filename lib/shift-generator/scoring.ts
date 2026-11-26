@@ -3,6 +3,8 @@
 // can see why a candidate won. The arithmetic, including the order in which the
 // terms are summed, matches the original page implementation exactly.
 
+import { NOVICE_ONLY_PENALTY_PER_HOUR } from './coverage'
+
 export const RESCUE_BOOST = 250
 export const OVER_TARGET_PENALTY_PER_DAY = -150
 export const STREAK_PENALTY = -500
@@ -36,6 +38,8 @@ export type CandidateFactors = {
   shortfall: number
   /** Weekend / holiday shifts already worked this month (土日勤務の公平さ); 0 when the day is a weekday. */
   previousWeekendShifts: number
+  /** Hours the candidate would work with no one experienced on shift (新人だけの時間帯); 0 if not a novice. */
+  noviceOnlyHours?: number
 }
 
 export type ScoreBreakdown = {
@@ -52,6 +56,8 @@ export type ScoreBreakdown = {
   timeShortfall: number
   /** 土日勤務の公平さ: earlier weekend / holiday shifts this month x WEEKEND_FAIRNESS_PENALTY_PER_SHIFT. */
   weekendFairness: number
+  /** 新人だけの時間帯: noviceOnlyHours x NOVICE_ONLY_PENALTY_PER_HOUR. */
+  noviceOnly: number
   total: number
 }
 
@@ -79,6 +85,7 @@ export const scoreCandidate = (factors: CandidateFactors): ScoreBreakdown => {
 
   const timeShortfall = -Math.round(factors.shortfall / 0.25) * TIME_SHORTFALL_PENALTY_PER_QUARTER_HOUR
   const weekendFairness = factors.previousWeekendShifts * WEEKEND_FAIRNESS_PENALTY_PER_SHIFT
+  const noviceOnly = (factors.noviceOnlyHours ?? 0) * NOVICE_ONLY_PENALTY_PER_HOUR
 
   return {
     attendance,
@@ -88,6 +95,7 @@ export const scoreCandidate = (factors: CandidateFactors): ScoreBreakdown => {
     rank,
     timeShortfall,
     weekendFairness,
-    total: attendance + rescueBoost + overTarget + streak + rank + timeShortfall + weekendFairness,
+    noviceOnly,
+    total: attendance + rescueBoost + overTarget + streak + rank + timeShortfall + weekendFairness + noviceOnly,
   }
 }

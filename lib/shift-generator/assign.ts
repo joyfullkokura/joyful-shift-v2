@@ -14,6 +14,7 @@ import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import { scoreCandidate, type ScoreBreakdown } from './scoring'
 import { checkShift, type ConstraintReason } from './constraints'
 import { pickStartTime, startTimesOf } from './start-options'
+import { coverageGain, noviceOnlyHoursFor } from './coverage'
 import { calculateActualHours, fToT, shiftHoursFromLabel, toTimeRange } from './time'
 import type { ShiftRequest, StaffRecord, TimeRange } from './types'
 
@@ -23,6 +24,8 @@ export type SlotCandidate = {
   index: number
   /** 0 = requested or primary range, 1 = secondary range, 2 = store hours fallback. */
   priority: number
+  /** Missing opening / closing / 責任者 requirements this candidate would meet (chosen first; 0 while the checks are off). */
+  coverage: number
   start: number
   end: number
   score: number
@@ -104,7 +107,7 @@ const countPreviousWeekendShifts = (shifts: Record<string, string>, dateStr: str
   ).length
 
 const compareCandidates = (left: SlotCandidate, right: SlotCandidate) =>
-  right.score - left.score || left.priority - right.priority || left.index - right.index
+  right.coverage - left.coverage || right.score - left.score || left.priority - right.priority || left.index - right.index
 
 /**
  * First pass: walks the month day by day and fills each slot with the
@@ -172,10 +175,12 @@ export const assignInitialSlots = (context: GenerationContext) => {
             overlappingRanks,
             shortfall: matchingRange.shortfall,
             previousWeekendShifts: isWeekendDay ? countPreviousWeekendShifts(scheduleStaff[index].shifts, dateStr, holidays) : 0,
+            noviceOnlyHours: noviceOnlyHoursFor(context, dailyShifts, staff, matchingRange.start, matchingRange.end),
           })
           candidates.push({
             index,
             priority: matchingRange.priority,
+            coverage: coverageGain(context, dailyShifts, staff, matchingRange.start, matchingRange.end),
             start: matchingRange.start,
             end: matchingRange.end,
             score: breakdown.total,

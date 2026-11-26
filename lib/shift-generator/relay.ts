@@ -1,6 +1,7 @@
 import { canWorkSlot, type DayAssignments, type GenerationContext } from './context'
 import { jobForGroup } from './jobs'
 import { checkShift } from './constraints'
+import { dayCoverage } from './coverage'
 import { actualHoursForShifts, fToT } from './time'
 
 /** A relay that extended someone's shift to cover part of another slot. */
@@ -65,6 +66,10 @@ export const fillGapsWithRelays = (context: GenerationContext, assignmentsByDate
             if (!canWorkSlot(context, staff, dateStr, { group: ownSlot.group, start, end })) return null
             const staffIndexOfRelay = staffIndexById.get(shift.staffId)
             if (staffIndexOfRelay === undefined || checkShift(context, staffIndexOfRelay, dateStr, start, end)) return null
+            if (context.rules.noviceRule === 'hard') {
+              const extended = dayData.shifts.map(item => item === shift ? { staffId: item.staffId, start, end } : item)
+              if (dayCoverage(context, extended).noviceOnlyHours > dayCoverage(context, dayData.shifts).noviceOnlyHours + 1e-9) return null
+            }
             return { staff, row, shift, start, end }
           })
           .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
