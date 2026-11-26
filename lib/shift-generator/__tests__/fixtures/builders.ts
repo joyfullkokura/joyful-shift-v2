@@ -1,3 +1,4 @@
+import type { SlotSetting } from '../../start-options'
 import type { GeneratorInput, ShiftRequest, StaffRecord } from '../../types'
 
 // Small, explicit inputs for rule tests.
@@ -20,7 +21,7 @@ export const hallInput = (options: {
   year?: number
   month?: number
   perDay?: number
-  slot?: { start: number; end: number }
+  slot?: SlotSetting
   monthlyTargetHours?: number
   holidays?: Record<string, string>
 }): GeneratorInput => {

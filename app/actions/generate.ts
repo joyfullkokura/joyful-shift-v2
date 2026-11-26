@@ -5,6 +5,7 @@ import { type DayRequest, type DayRequestKind, businessHoursOf, convertLegacyReq
 import { STAFF_SECRET_COLUMNS, STORE_SECRET_COLUMNS, check, omit, runAction, toRow, toRows } from '@/lib/server/action'
 import { requireAdmin } from '@/lib/server/dal'
 import { parseRequiredCurve } from '@/lib/required-curve'
+import { parseSlotSettings } from '@/lib/shift-generator/start-options'
 import { type StaffRank, staffRankOf } from '@/lib/staff-order'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { assert, isId, isJsonWithin, isMonthStart, isRecord, isShortText, nextMonthStart } from '@/lib/server/validation'
@@ -149,7 +150,7 @@ export async function saveGenerationSettings(storeId: string, monthStart: string
       const curve = entry.required_curve == null ? null : parseRequiredCurve(entry.required_curve)
       assert(entry.required_curve == null || curve, '必要人数の設定を確認してください。')
       return {
-        store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: entry.slots,
+        store_id: storeId, target_month: monthStart, config_type: entry.config_type, counts: entry.counts, slots: parseSlotSettings(entry.slots),
         expected_sales: expectedSales, required_curve: curve,
       }
     })

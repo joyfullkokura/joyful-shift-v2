@@ -1,6 +1,7 @@
 // Data shapes used by the shift generator and the generate screen.
 
 import type { LaborRules } from '@/lib/labor-rules'
+import type { SlotSetting } from './start-options'
 
 export type JobRole = 'ホール' | 'キッチン'
 
@@ -104,7 +105,8 @@ export type GeneratorInput = {
   targetMonth: number
   groups: string[]
   counts: Record<string, Record<string, number>>
-  slots: Record<string, Record<string, { start: number; end: number }>>
+  /** day type -> "group_index" -> slot (hours and start-time candidates). */
+  slots: Record<string, Record<string, SlotSetting>>
   selectedSpecialDays: string[]
   monthlyTargetHours: number
   /** Labor rules (hard limits). Missing = the store defaults (8h / 40h, Sunday weeks, 3h minimum, 11h rest). */

@@ -28,6 +28,7 @@ import { type RequiredCurve, parseRequiredCurve } from '@/lib/required-curve'
 import { peopleFromSales } from '@/lib/hourly-sales'
 import { type CapacityCheck, checkCapacity } from '@/lib/shift-generator/capacity'
 import { evaluateSchedule } from '@/lib/shift-generator/metrics'
+import { DEFAULT_START_OFFSETS, START_OFFSET_CHOICES, type SlotSetting, parseSlotSettings } from '@/lib/shift-generator/start-options'
 import ScheduleMetricsPanel from '@/components/ScheduleMetricsPanel'
 import type { PreviousMonthTail } from '@/app/actions/generate'
 import { useUnsavedChanges } from '@/lib/client/app-version'
@@ -77,7 +78,7 @@ const DEFAULT_EXPECTED_SALES: Record<string, number> = { wd: 230_000, we: 345_00
 const expectedSalesOf = (value: unknown): number | null =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
 
-type SlotTimes = { start: number; end: number }
+type SlotTimes = SlotSetting
 
 /** Store columns used by this screen (row from the server, typed). */
 type GenerateStoreInfo = GeneratorStore & {
@@ -102,10 +103,7 @@ const toCounts = (value: unknown): Record<string, number> => isPlainObject(value
   : {}
 
 /** generation_settings.slots: "group_index" -> hours. Malformed entries are ignored. */
-const toSlots = (value: unknown): Record<string, SlotTimes> => isPlainObject(value)
-  ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, SlotTimes] =>
-    isPlainObject(entry[1]) && typeof entry[1].start === 'number' && typeof entry[1].end === 'number'))
-  : {}
+const toSlots = (value: unknown): Record<string, SlotTimes> => parseSlotSettings(value)
 
 type ActiveShiftCell = {
   staffId: string
@@ -160,7 +158,7 @@ export default function GeneratePage() {
 
   const [selectedSpecialDays, setSelectedSpecialDays] = useState<string[]>([])
   const [counts, setCounts] = useState<Record<string, Record<string, number>>>({})
-  const [slots, setSlots] = useState<Record<string, Record<string, { start: number, end: number }>>>({})
+  const [slots, setSlots] = useState<Record<string, Record<string, SlotTimes>>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [generatedSchedule, setGeneratedSchedule] = useState<GeneratedSchedule | null>(null)
   /** The schedule as last loaded or saved; any other schedule on screen is unsaved (reload banner warns). */
@@ -383,7 +381,21 @@ export default function GeneratePage() {
       let { start, end } = current
       if (type === 'start') start = Math.min(val, end - 0.5)
       if (type === 'end') end = Math.max(val, start + 0.5)
-      tabData[id] = { start, end }
+      tabData[id] = { ...current, start, end }
+      return { ...prev, [tab]: tabData }
+    })
+  }
+
+  /** Turns one start-time candidate of a slot on or off (the slot start always stays on). */
+  const toggleStartOffset = (tab: string, id: string, offset: number) => {
+    if (offset === 0) return
+    setGeneratedSchedule(null)
+    setSlots(prev => {
+      const tabData = { ...(prev[tab] || {}) }
+      const current = tabData[id] || { start: 10, end: 18 }
+      const offsets = current.startOffsets ?? DEFAULT_START_OFFSETS
+      const next = offsets.includes(offset) ? offsets.filter(value => value !== offset) : [...offsets, offset]
+      tabData[id] = { ...current, startOffsets: [...new Set([0, ...next])].sort((left, right) => left - right) }
       return { ...prev, [tab]: tabData }
     })
   }
@@ -1054,9 +1066,13 @@ export default function GeneratePage() {
               <div className="grid grid-cols-1 gap-4 border-l border-dashed border-slate-200 pl-4">
                 {Array.from({ length: count }).map((_, i) => {
                   const slotId = `${group}_${i}`
-                  const { start, end } = currentTabSlots[slotId] || { start: 10, end: 18 }
+                  const slotSetting = currentTabSlots[slotId] || { start: 10, end: 18 }
+                  const { start, end } = slotSetting
+                  const startOffsets = slotSetting.startOffsets ?? DEFAULT_START_OFFSETS
+                  const slotSpan = (end < start ? end + 24 : end) - start
                   return (
-                    <div key={slotId} className={`flex flex-col gap-4 rounded-md border bg-white p-4 md:flex-row md:items-center ${color.border}`}>
+                    <div key={slotId} className={`rounded-md border bg-white p-4 ${color.border}`}>
+                    <div className="flex flex-col gap-4 md:flex-row md:items-center">
                       <div className="w-24 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{group} No.{i + 1}</div>
                       <div className="flex flex-1 items-center gap-3">
                         <div className="relative flex h-16 flex-1 items-center">
@@ -1075,6 +1091,22 @@ export default function GeneratePage() {
                       <div className={`min-w-[70px] rounded-md border px-3 py-1.5 text-center text-sm font-bold ${color.border} ${color.bg} ${color.text}`}>
                         {calculateActualHours(start, end).toFixed(1)}h
                       </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                      <span className="text-xs font-bold text-slate-600">開始時刻の候補</span>
+                      {START_OFFSET_CHOICES.filter(offset => offset < slotSpan).map(offset => {
+                        const isOn = startOffsets.includes(offset)
+                        return (
+                          <button key={offset} type="button" aria-pressed={isOn} disabled={offset === 0}
+                            aria-label={`${group} No.${i + 1} の開始時刻の候補 ${fToT(start + offset)}`}
+                            onClick={() => toggleStartOffset(activeTab, slotId, offset)}
+                            className={`min-h-9 rounded-md border px-3 text-xs font-bold tabular-nums disabled:cursor-default ${isOn ? 'border-slate-700 bg-slate-800 text-white' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'}`}>
+                            {fToT(start + offset)}
+                          </button>
+                        )
+                      })}
+                      <span className="text-[11px] text-slate-500">{slotSetting.startOffsets ? '選んだ時刻のどれかから入ります。' : '未設定：枠の開始から1時間ごと、2時間後まで。'}</span>
+                    </div>
                     </div>
                   )
                 })}

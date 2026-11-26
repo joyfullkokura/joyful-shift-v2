@@ -13,6 +13,7 @@ import { jobForGroup } from './jobs'
 import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import { scoreCandidate, type ScoreBreakdown } from './scoring'
 import { checkShift, type ConstraintReason } from './constraints'
+import { pickStartTime, startTimesOf } from './start-options'
 import { calculateActualHours, fToT, shiftHoursFromLabel, toTimeRange } from './time'
 import type { ShiftRequest, StaffRecord, TimeRange } from './types'
 
@@ -56,8 +57,9 @@ type MatchingRange = { start: number; end: number; priority: number; shortfall: 
 
 /**
  * The best part of the slot this staff member can cover, allowing up to 2 hours
- * uncovered. The day's request replaces the usual ranges; store hours are a
- * fallback only for staff with no ranges at all.
+ * uncovered. The shift starts at one of the slot's start-time candidates (the
+ * earliest one the person can make). The day's request replaces the usual
+ * ranges; store hours are a fallback only for staff with no ranges at all.
  */
 const findMatchingRange = (
   context: GenerationContext,
@@ -66,6 +68,7 @@ const findMatchingRange = (
   dateStr: string,
   slotStart: number,
   slotEnd: number,
+  startTimes: readonly number[],
 ): MatchingRange | undefined => {
   const requestedRange = getRequestedRange(request, context.storeRange)
   const weeklyRange = requestedRange ? undefined : weeklyRangeFor(staff, dateStr, context.storeRange)
@@ -83,7 +86,7 @@ const findMatchingRange = (
       ]
   return availableRanges
     .map(({ range, priority }) => {
-      const start = Math.max(slotStart, range.start)
+      const start = pickStartTime(startTimes, range.start) ?? Number.POSITIVE_INFINITY
       const end = Math.min(slotEnd, range.end)
       const shortfall = (slotEnd - slotStart) - Math.max(0, end - start)
       return { start, end, priority, shortfall }
@@ -134,6 +137,7 @@ export const assignInitialSlots = (context: GenerationContext) => {
       for (let slotIndex = 0; slotIndex < count; slotIndex++) {
         const slot = slots[configType]?.[`${group}_${slotIndex}`] || { start: 10, end: 18 }
         const slotEnd = slot.end < slot.start ? slot.end + 24 : slot.end
+        const startTimes = startTimesOf(slot, slotEnd)
         const dailySlot: DailySlot = { group, slotIndex, start: slot.start, end: slotEnd, assigned: false, staffId: null, relayStaffIds: [] }
         dailySlots.push(dailySlot)
 
@@ -150,7 +154,7 @@ export const assignInitialSlots = (context: GenerationContext) => {
           if (staff.is_employee && scheduleStaff[index].assignedDays >= EMPLOYEE_MAX_DAYS) return
           if (!matchesGroup(staff, group)) return
 
-          const matchingRange = findMatchingRange(context, staff, request, dateStr, slot.start, slotEnd)
+          const matchingRange = findMatchingRange(context, staff, request, dateStr, slot.start, slotEnd, startTimes)
           if (!matchingRange) return
           const blocked = checkShift(context, index, dateStr, matchingRange.start, matchingRange.end)
           if (blocked) {
