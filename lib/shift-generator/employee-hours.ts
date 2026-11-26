@@ -9,6 +9,7 @@ import {
   type GenerationContext,
 } from './context'
 import { isUnavailableOn } from './requests'
+import { checkShift } from './constraints'
 import { actualHoursForShifts, calculateActualHours, fToT } from './time'
 import type { GeneratedStaffShift, StaffRecord } from './types'
 
@@ -55,6 +56,8 @@ const swapForLongerSlot = (
         || !partTimeShift
         || !canWorkSlot(context, employee, dateStr, longerSlot)
         || !canWorkSlot(context, partTimeStaff, dateStr, employeeSlot)
+        || checkShift(context, staffIndexById.get(employee.id) ?? -1, dateStr, longerSlot.start, longerSlot.end)
+        || checkShift(context, partTimeIndex, dateStr, employeeSlot.start, employeeSlot.end)
       ) continue
 
       const partTimeRow = scheduleStaff[partTimeIndex]
@@ -108,6 +111,7 @@ const takeOverPartTimeSlot = (
 
     for (const { slot, staff: partTimeStaff, row: partTimeRow } of partTimeSlots) {
       if (!canWorkSlot(context, employee, dateStr, slot)) continue
+      if (checkShift(context, staffIndexById.get(employee.id) ?? -1, dateStr, slot.start, slot.end)) continue
       const shift = dayData.shifts.find(item => item.slotKey === `${slot.group}_${slot.slotIndex}`)
       if (!shift) continue
       shift.staffId = employee.id
@@ -167,9 +171,13 @@ const extendShift = (
     const firstStep = Math.floor(shift.end * EXTENSION_STEPS_PER_HOUR + EPSILON) + 1
     const lastStep = Math.floor(availableEnd * EXTENSION_STEPS_PER_HOUR + EPSILON)
     let extendedEnd: number | null = null
+    const employeeIndex = context.staffIndexById.get(employee.id) ?? -1
     for (let step = firstStep; step <= lastStep; step++) {
       const candidateEnd = step / EXTENSION_STEPS_PER_HOUR
-      if (otherShiftHours + calculateActualHours(shift.start, candidateEnd) <= targetHours + EPSILON) extendedEnd = candidateEnd
+      if (otherShiftHours + calculateActualHours(shift.start, candidateEnd) > targetHours + EPSILON) continue
+      // Within the daily / weekly limits and the rest interval to the next day.
+      if (checkShift(context, employeeIndex, dateStr, shift.start, candidateEnd)) continue
+      extendedEnd = candidateEnd
     }
     if (extendedEnd === null) continue
     shift.end = extendedEnd

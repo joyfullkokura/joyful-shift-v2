@@ -96,7 +96,9 @@ describe('evaluateSchedule agrees with the independent validator (300 seeded sto
   it('counts the same violations of each kind', () => {
     const totals: Record<string, number> = {}
     for (let seed = 1; seed <= 300; seed++) {
-      const input = { ...randomGeneratorInput(seed), holidays: LEGACY_HOLIDAYS }
+      // Generated with relaxed limits (so there is something to find), evaluated with the real ones.
+      const relaxed = rules({ dailyMaxHours: 24, weeklyMaxHours: 168, minShiftHours: 0, restIntervalHours: 0, laborTimeMode: 'weekly_40' })
+      const input = { ...randomGeneratorInput(seed), holidays: LEGACY_HOLIDAYS, rules: relaxed }
       const schedule = generateSchedule(input)
       const ruleSet = rules({
         laborTimeMode: seed % 3 === 0 ? 'monthly_variable' : 'weekly_40',

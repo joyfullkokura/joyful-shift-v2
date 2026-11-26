@@ -12,6 +12,7 @@ import {
 import { jobForGroup } from './jobs'
 import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import { scoreCandidate, type ScoreBreakdown } from './scoring'
+import { checkShift, type ConstraintReason } from './constraints'
 import { calculateActualHours, fToT, shiftHoursFromLabel, toTimeRange } from './time'
 import type { ShiftRequest, StaffRecord, TimeRange } from './types'
 
@@ -37,6 +38,8 @@ export type SlotDecision = {
   selectedStaffId: string | null
   /** All eligible candidates, best first. */
   candidates: Array<Omit<SlotCandidate, 'index'> & { staffId: string }>
+  /** People who could otherwise have taken the slot, counted by the hard rule that excluded them. */
+  blockedBy: Partial<Record<ConstraintReason, number>>
 }
 
 const configTypeFor = (context: GenerationContext, dateStr: string, day: number) => {
@@ -140,6 +143,7 @@ export const assignInitialSlots = (context: GenerationContext) => {
           .map(shift => staffList.find(person => person.id === shift.staffId)?.rank)
 
         const candidates: SlotCandidate[] = []
+        const blockedBy: Partial<Record<ConstraintReason, number>> = {}
         staffList.forEach((staff, index) => {
           const request = requestFor(context, staff.id, dateStr)
           if (isUnavailableOn(staff, request, dateStr, context.storeRange) || dailyAssignments.has(staff.id)) return
@@ -148,6 +152,11 @@ export const assignInitialSlots = (context: GenerationContext) => {
 
           const matchingRange = findMatchingRange(context, staff, request, dateStr, slot.start, slotEnd)
           if (!matchingRange) return
+          const blocked = checkShift(context, index, dateStr, matchingRange.start, matchingRange.end)
+          if (blocked) {
+            blockedBy[blocked] = (blockedBy[blocked] ?? 0) + 1
+            return
+          }
 
           const breakdown = scoreCandidate({
             weeklyTargetDays: staff.target_work_days ?? staff.weekly_target_days ?? 0,
@@ -180,6 +189,7 @@ export const assignInitialSlots = (context: GenerationContext) => {
           end: slotEnd,
           selectedStaffId: selected ? staffList[selected.index].id : null,
           candidates: candidates.map(({ index, ...candidate }) => ({ staffId: staffList[index].id, ...candidate })),
+          blockedBy,
         })
         if (!selected) continue
 

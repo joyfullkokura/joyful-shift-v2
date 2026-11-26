@@ -1,3 +1,4 @@
+import type { LaborRules } from '@/lib/labor-rules'
 import { jobForGroup } from './jobs'
 import { getRequestedRange, isUnavailableOn, weeklyRangeFor } from './requests'
 import type { GeneratedStaffShift, GeneratorInput, JobRole, ShiftRequest, StaffRecord, TimeRange } from './types'
@@ -45,6 +46,10 @@ export type GenerationContext = {
   daysInMonth: number
   /** Store closing time in decimal hours (fallback when there is no store range). */
   maxTime: number
+  /** Hard labor rules (input.rules or the defaults). */
+  rules: LaborRules
+  /** staff id → date → label, for the previous month's last days (read through ledger.ts). */
+  previousShifts: Map<string, Record<string, string>>
 }
 
 export const requestFor = (context: GenerationContext, staffId: string, dateStr: string): ShiftRequest | undefined =>

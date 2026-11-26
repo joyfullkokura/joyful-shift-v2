@@ -91,7 +91,7 @@ export default function ScheduleMetricsPanel({ evaluation, capacity, target, sta
               ))}
             </ul>
           )}
-        <p className="mt-1 text-xs text-slate-500">この確認はまだ自動作成には反映していません。次の段階で、上限を超えないように作ります。</p>
+        <p className="mt-1 text-xs text-slate-500">自動作成はこれらのルールを超えないように作ります。手で直したシフトはここで確認できます。</p>
       </div>
 
       <details>

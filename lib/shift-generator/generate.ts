@@ -1,3 +1,4 @@
+import { DEFAULT_LABOR_RULES } from '@/lib/labor-rules'
 import { parseSkillOptions } from '@/lib/skill-options'
 import { calculateScheduleAlerts } from './alerts'
 import { assignInitialSlots, type SlotDecision } from './assign'
@@ -41,6 +42,8 @@ const createContext = (input: GeneratorInput): GenerationContext => {
     storeRange: toTimeRange(store.open_time, store.close_time),
     daysInMonth: new Date(targetYear, targetMonth, 0).getDate(),
     maxTime: tToF(store.close_time ?? undefined),
+    rules: input.rules ?? DEFAULT_LABOR_RULES,
+    previousShifts: new Map((input.previousMonth ?? []).map(person => [person.id, person.shifts])),
   }
 }
 

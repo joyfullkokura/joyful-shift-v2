@@ -501,12 +501,23 @@ export default function GeneratePage() {
       selectedSpecialDays,
       monthlyTargetHours,
       holidays: holidaysOfYear(targetYear),
+      // Hard limits (rule settings) and the previous month's last week for the weekly limit / rest interval.
+      rules: laborRules,
+      previousMonth: inputsResult.data.previousMonth.staff,
     }
     const schedule = generateSchedule(generatorInput)
     setGenerationExtras({
       staff: generatorInput.staff,
       previousMonth: inputsResult.data.previousMonth,
-      capacity: checkCapacity({ ...generatorInput, rules: laborRules, expectedSales }),
+      capacity: (() => {
+        const check = checkCapacity({ ...generatorInput, rules: laborRules, expectedSales })
+        if (inputsResult.data.previousMonth.source === 'none') {
+          check.warnings.push('前月のシフト（確定・下書き）がないため、月初の週の上限と勤務間インターバルは今月の分だけで判定しました。')
+        } else if (inputsResult.data.previousMonth.source === 'draft') {
+          check.warnings.push('前月は確定前のため、下書きのシフトで月初の週の上限と勤務間インターバルを判定しました。')
+        }
+        return check
+      })(),
     })
     setGeneratedSchedule(schedule)
   }

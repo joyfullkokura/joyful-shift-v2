@@ -1,5 +1,7 @@
 // Data shapes used by the shift generator and the generate screen.
 
+import type { LaborRules } from '@/lib/labor-rules'
+
 export type JobRole = 'ホール' | 'キッチン'
 
 export type ShiftRequirement = {
@@ -62,6 +64,8 @@ export type StaffRecord = {
   work_end_2?: string | null
   /** Weekday choices (see lib/weekly-availability.ts); null = not set, the time bands above apply. */
   weekly_availability?: unknown
+  /** Under 18: never placed in the late-night window. */
+  is_minor?: boolean | null
 }
 
 export type ShiftRequest = {
@@ -103,6 +107,10 @@ export type GeneratorInput = {
   slots: Record<string, Record<string, { start: number; end: number }>>
   selectedSpecialDays: string[]
   monthlyTargetHours: number
+  /** Labor rules (hard limits). Missing = the store defaults (8h / 40h, Sunday weeks, 3h minimum, 11h rest). */
+  rules?: LaborRules
+  /** Shifts of the last days of the previous month (weekly limit and rest interval across the boundary). */
+  previousMonth?: { id: string; shifts: Record<string, string> }[]
   /** YYYY-MM-DD -> holiday name. Weekends are detected separately. */
   holidays: Readonly<Record<string, string>>
 }
