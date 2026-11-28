@@ -15,7 +15,17 @@ import { type UsualAvailability, usualAvailabilityOf } from '@/lib/usual-availab
 import { type StaffCategory, isStaffCategory, sortStaff } from '@/lib/staff-order'
 import { getStoreBusinessHours } from '@/lib/server/business-hours'
 import { requireAdmin, requireSession } from '@/lib/server/dal'
-import { deadlineDayOf, isDeadlineDay, requestDeadlineDate } from '@/lib/request-deadline'
+import {
+  DEADLINE_LOCKED_MESSAGE,
+  type DeadlineSetting,
+  type RequestDeadline,
+  deadlineInstant,
+  deadlineSettingOf,
+  isDeadlineDay,
+  isDeadlinePassed,
+  isDeadlineTime,
+  resolveRequestDeadline,
+} from '@/lib/request-deadline'
 import { CLEARED_ANALYSIS, type ExistingDayRequest, planMonthRequestSave } from '@/lib/server/request-save-plan'
 import { getAdminClient } from '@/lib/server/supabase-admin'
 import { assert, isDateKey, isMonthStart, isRecord, isShortText, nextMonthStart, nextMonthStartInJapan } from '@/lib/server/validation'
@@ -53,9 +63,11 @@ export type RequestsPageData = {
   /** The logged-in staff member's usual availability, shown faintly on days without a request. */
   usual: UsualAvailability
   hours: BusinessHours
-  /** 提出期限 (YYYY-MM-DD, display only) and the store's 前月〇日 setting (22 when unset). */
-  deadline: string
-  deadlineDay: number
+  /** 提出期限 of this month (null = none set: nothing is locked) and the store's monthly setting. */
+  deadline: RequestDeadline | null
+  monthlyDeadline: DeadlineSetting | null
+  /** Server clock (ms) when the data was read; the screen counts from it. */
+  now: number
   /** イベント row: date → note. */
   events: Record<string, string>
 }
@@ -70,23 +82,21 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
     const session = await requireSession(storeId)
     assert(isMonthStart(monthStart))
     const db = getAdminClient()
-    const [staffResult, requestResult, hours, meResult, storeResult, eventResult] = await Promise.all([
+    const [staffResult, requestResult, hours, meResult, deadline, eventResult] = await Promise.all([
       db.from('staff').select('id, name, is_employee, category, display_order').eq('store_id', storeId),
       db.from('shift_requests').select(REQUEST_COLUMNS)
         .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
       getBusinessHours(storeId),
       db.from('staff').select('weekly_availability, work_start_1, work_end_1, work_start_2, work_end_2')
         .eq('id', session.id).eq('store_id', storeId).maybeSingle(),
-      db.from('stores').select('request_deadline_day').eq('store_id', storeId).maybeSingle(),
+      loadRequestDeadline(storeId, monthStart),
       db.from('store_day_events').select('date, note')
         .eq('store_id', storeId).gte('date', monthStart).lt('date', nextMonthStart(monthStart)),
     ])
     check(staffResult.error)
     check(requestResult.error)
     check(meResult.error)
-    check(storeResult.error)
     check(eventResult.error)
-    const deadlineDay = deadlineDayOf(toRow(storeResult.data)?.request_deadline_day)
     const requests = toRows(requestResult.data).map(row => ({ ...toView(row, hours), staff_id: String(row.staff_id) }))
     return {
       month: monthStart,
@@ -102,8 +112,9 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
         .map(request => ({ date: request.date, memo: request.memo, request: request.request })),
       usual: usualAvailabilityOf(toRow(meResult.data)),
       hours,
-      deadline: requestDeadlineDate(monthStart, deadlineDay),
-      deadlineDay,
+      deadline: deadline.deadline,
+      monthlyDeadline: deadline.monthly,
+      now: Date.now(),
       events: Object.fromEntries(toRows(eventResult.data).flatMap(row =>
         typeof row.note === 'string' && row.note ? [[String(row.date), row.note]] : [])),
     }
@@ -112,14 +123,80 @@ export async function getRequestsPageMonth(storeId: string, monthStart: string):
 
 const MAX_EVENT_LENGTH = 100
 
-/** 提出期限 setting: requests are due on this day of the previous month (display only). Admin only. */
-export async function saveRequestDeadlineDay(storeId: string, day: number): Promise<ActionResult<number>> {
-  return runAction('saveRequestDeadlineDay', async () => {
+export type RequestDeadlineView = { deadline: RequestDeadline | null; monthly: DeadlineSetting | null }
+
+/** The store's monthly 提出期限 setting and the deadline that applies to one month (override first). */
+const loadRequestDeadline = async (storeId: string, monthStart: string): Promise<RequestDeadlineView> => {
+  const db = getAdminClient()
+  const [storeResult, overrideResult] = await Promise.all([
+    db.from('stores').select('request_deadline_day, request_deadline_time').eq('store_id', storeId).maybeSingle(),
+    db.from('store_request_deadline_overrides').select('deadline_at')
+      .eq('store_id', storeId).eq('target_month', monthStart).maybeSingle(),
+  ])
+  check(storeResult.error)
+  check(overrideResult.error)
+  const store = toRow(storeResult.data)
+  const monthly = deadlineSettingOf(store?.request_deadline_day, store?.request_deadline_time)
+  const overrideAt = toRow(overrideResult.data)?.deadline_at
+  return { monthly, deadline: resolveRequestDeadline(monthStart, monthly, typeof overrideAt === 'string' ? overrideAt : null) }
+}
+
+/**
+ * Part-timers cannot change a month after its deadline (server clock).
+ * 社員・店長 always can; a store without a deadline never locks.
+ */
+const assertRequestsOpen = async (session: { is_employee: boolean }, storeId: string, monthStart: string) => {
+  if (session.is_employee) return
+  const { deadline } = await loadRequestDeadline(storeId, monthStart)
+  if (deadline && isDeadlinePassed(deadline.at, Date.now())) throw new UserFacingError(DEADLINE_LOCKED_MESSAGE)
+}
+
+export type RequestDeadlineInput = { scope: 'monthly' | 'month'; day: number; time: string }
+
+/**
+ * Changes the 提出期限. scope 'monthly' changes the store setting (this and every
+ * later month without an override); 'month' sets an override for monthStart only.
+ * Admin (社員・店長) only; who changed it is recorded.
+ */
+export async function saveRequestDeadline(storeId: string, monthStart: string, input: RequestDeadlineInput): Promise<ActionResult<RequestDeadlineView>> {
+  return runAction('saveRequestDeadline', async () => {
+    const session = await requireAdmin(storeId)
+    assert(isMonthStart(monthStart) && isRecord(input) && (input.scope === 'monthly' || input.scope === 'month'))
+    assert(isDeadlineDay(input.day), '1〜31日の中から選んでください。')
+    assert(isDeadlineTime(input.time), '時刻を選び直してください。')
+    const db = getAdminClient()
+    const updatedAt = new Date().toISOString()
+    if (input.scope === 'monthly') {
+      const { error } = await db.from('stores').update({
+        request_deadline_day: input.day,
+        request_deadline_time: input.time,
+        request_deadline_updated_by: session.id,
+        request_deadline_updated_at: updatedAt,
+      }).eq('store_id', storeId)
+      check(error)
+    } else {
+      const { error } = await db.from('store_request_deadline_overrides').upsert({
+        store_id: storeId,
+        target_month: monthStart,
+        deadline_at: deadlineInstant(monthStart, { day: input.day, time: input.time }),
+        updated_by: session.id,
+        updated_at: updatedAt,
+      }, { onConflict: 'store_id,target_month' })
+      check(error)
+    }
+    return loadRequestDeadline(storeId, monthStart)
+  })
+}
+
+/** Removes the "this month only" deadline: the month goes back to the monthly setting. Admin only. */
+export async function clearMonthRequestDeadline(storeId: string, monthStart: string): Promise<ActionResult<RequestDeadlineView>> {
+  return runAction('clearMonthRequestDeadline', async () => {
     await requireAdmin(storeId)
-    assert(isDeadlineDay(day), '1〜31日の中から選んでください。')
-    const { error } = await getAdminClient().from('stores').update({ request_deadline_day: day }).eq('store_id', storeId)
+    assert(isMonthStart(monthStart))
+    const { error } = await getAdminClient().from('store_request_deadline_overrides').delete()
+      .eq('store_id', storeId).eq('target_month', monthStart)
     check(error)
-    return day
+    return loadRequestDeadline(storeId, monthStart)
   })
 }
 
@@ -151,14 +228,16 @@ export async function saveDayEvent(storeId: string, date: string, note: string):
 export type DayRequestInput = { date: string; kind: DayRequest['kind'] | null; start: string | null; end: string | null; memo: string }
 
 /**
- * Replaces the logged-in staff member's own requests for one month.
- * Months before next month (JST) are read-only, matching the screen.
+ * Replaces the logged-in staff member's own requests for one month (sending
+ * fewer days withdraws the others). Months before next month (JST) are
+ * read-only, matching the screen; after the 提出期限 part-timers cannot save.
  */
 export async function saveMyMonthRequests(storeId: string, monthStart: string, entries: DayRequestInput[]): Promise<ActionResult<null>> {
   return runAction('saveMyMonthRequests', async () => {
     const session = await requireSession(storeId)
     assert(isMonthStart(monthStart) && Array.isArray(entries) && entries.length <= 31)
     if (monthStart < nextMonthStartInJapan()) throw new UserFacingError('この月の休み希望は締め切られています。')
+    await assertRequestsOpen(session, storeId, monthStart)
     const monthEnd = nextMonthStart(monthStart)
     const hours = await getBusinessHours(storeId)
 

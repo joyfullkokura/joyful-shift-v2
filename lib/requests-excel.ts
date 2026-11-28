@@ -20,7 +20,7 @@ export type RequestsExcelInput = {
   requests: { staff_id: string; date: string; memo: string; request: DayRequest | null }[]
   /** date → note */
   events: Record<string, string>
-  /** YYYY-MM-DD */
+  /** YYYY-MM-DD; empty when the store has no deadline (the cell stays blank). */
   deadline: string
   isHoliday: (date: string) => boolean
 }
@@ -82,7 +82,7 @@ export const fillRequestsSheet = (sheet: ExcelJS.Worksheet, input: RequestsExcel
   title.alignment = { vertical: 'middle', horizontal: 'left' }
   sheet.mergeCells(1, deadlineStart, 1, countColumn)
   const deadlineCell = sheet.getCell(1, deadlineStart)
-  deadlineCell.value = `提出期限 ${Number(deadline.slice(5, 7))}月${Number(deadline.slice(8, 10))}日`
+  deadlineCell.value = deadline ? `提出期限 ${Number(deadline.slice(5, 7))}月${Number(deadline.slice(8, 10))}日` : ''
   deadlineCell.font = { bold: true, size: 11 }
   deadlineCell.alignment = { vertical: 'middle', horizontal: 'right' }
   sheet.getRow(1).height = 26

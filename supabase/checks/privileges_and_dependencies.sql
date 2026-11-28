@@ -220,3 +220,25 @@ select r as role,
 select store_id, count(*) as staff, count(*) filter (where can_lead) as can_lead, count(*) filter (where can_open) as can_open,
        count(*) filter (where can_close) as can_close, count(*) filter (where flags_confirmed_at is null) as unconfirmed
   from public.staff group by store_id order by store_id;
+
+-- 14) Migration I (提出期限 time and per-month overrides). AFTER:
+--     a) new columns / table exist (expected 3 stores rows + 5 override rows).
+select table_name, column_name, data_type, column_default
+  from information_schema.columns
+ where table_schema = 'public'
+   and ((table_name = 'stores' and column_name in ('request_deadline_time', 'request_deadline_updated_by', 'request_deadline_updated_at'))
+     or table_name = 'store_request_deadline_overrides')
+ order by table_name, column_name;
+
+--     b) permissions (expected: service_role all true, anon / authenticated all false) and RLS on the new table.
+select r as role,
+       has_column_privilege(r, 'public.stores', 'request_deadline_time', 'UPDATE') as stores_time_update,
+       has_column_privilege(r, 'public.stores', 'request_deadline_updated_by', 'UPDATE') as stores_updated_by_update,
+       has_table_privilege(r, 'public.store_request_deadline_overrides', 'SELECT') as overrides_select,
+       has_table_privilege(r, 'public.store_request_deadline_overrides', 'INSERT') as overrides_insert,
+       has_table_privilege(r, 'public.store_request_deadline_overrides', 'DELETE') as overrides_delete,
+       (select relrowsecurity from pg_class where oid = 'public.store_request_deadline_overrides'::regclass) as overrides_rls
+  from (values ('service_role'), ('anon'), ('authenticated')) v(r);
+
+--     c) current settings: stores with request_deadline_day null have no deadline (nothing is locked).
+select store_id, request_deadline_day, request_deadline_time from public.stores order by store_id;

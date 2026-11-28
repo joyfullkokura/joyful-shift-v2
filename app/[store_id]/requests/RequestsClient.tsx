@@ -10,9 +10,9 @@ import {
   getRequestsPageMonth,
   saveDayEvent,
   saveMyMonthRequests,
-  saveRequestDeadlineDay,
 } from '@/app/actions/requests'
-import { DEFAULT_REQUEST_DEADLINE_DAY, formatDeadline, requestDeadlineDate } from '@/lib/request-deadline'
+import { DEADLINE_LOCKED_MESSAGE, type DeadlineSetting, type RequestDeadline, formatDeadline, isDeadlinePassed, japanParts } from '@/lib/request-deadline'
+import RequestDeadlineBar from '@/components/RequestDeadlineBar'
 import { fillRequestsSheet } from '@/lib/requests-excel'
 import { unwrap } from '@/lib/action-result'
 import { type BusinessHours, type DayRequest, DEFAULT_BUSINESS_HOURS, formatDayRequest, timeToMinutes } from '@/lib/day-request'
@@ -85,12 +85,16 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   const selectedStaff = currentStaff
   const [entries, setEntries] = useState<Record<string, DayEntry>>(() => toEntries(initial?.mine ?? []))
   const [hours, setHours] = useState<BusinessHours>(initial?.hours ?? DEFAULT_BUSINESS_HOURS)
-  /** 提出期限 (display only) and the store's 前月〇日 setting; イベント row of the month. */
-  const [deadline, setDeadline] = useState(initial?.deadline ?? '')
-  const [deadlineDay, setDeadlineDay] = useState(initial?.deadlineDay ?? DEFAULT_REQUEST_DEADLINE_DAY)
+  /** 提出期限 of the month (null = none) and the store's monthly setting; イベント row of the month. */
+  const [deadline, setDeadline] = useState<RequestDeadline | null>(initial?.deadline ?? null)
+  const [monthlyDeadline, setMonthlyDeadline] = useState<DeadlineSetting | null>(initial?.monthlyDeadline ?? null)
+  /** Ticks every 30 seconds so the remaining time and the lock follow the clock (the server decides on save). */
+  const [nowMs, setNowMs] = useState(() => initial?.now ?? Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const [events, setEvents] = useState<Record<string, string>>(initial?.events ?? {})
-  const [isEditingDeadline, setIsEditingDeadline] = useState(false)
-  const [deadlineDraft, setDeadlineDraft] = useState(deadlineDay)
   const [eventEditor, setEventEditor] = useState<{ date: string; note: string } | null>(null)
   const [isSavingStoreInfo, setIsSavingStoreInfo] = useState(false)
   const [usual, setUsual] = useState<UsualAvailability>(() => initial?.usual ?? usualAvailabilityOf(null))
@@ -122,10 +126,13 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
   const targetMonth = viewDate.getMonth() + 1
 
   const entryMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-  const isReadOnly = viewDate < entryMonthDate
+  const isPastMonth = viewDate < entryMonthDate
 
   const currentMonthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`
   const isMonthReady = loaded?.month === currentMonthStart && loaded.status === 'ready'
+  // After the 提出期限 part-timers can only view the month; 社員・店長 can still change it.
+  const isDeadlineLocked = !isPastMonth && !isAdmin && isMonthReady && deadline !== null && isDeadlinePassed(deadline.at, nowMs)
+  const isReadOnly = isPastMonth || isDeadlineLocked
   const monthLoadFailed = loaded?.month === currentMonthStart && loaded.status === 'error'
   const daysInMonth = new Date(targetYear, targetMonth, 0).getDate()
   const firstDayOfWeek = new Date(targetYear, targetMonth - 1, 1).getDay()
@@ -150,7 +157,8 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       setAllRequests(result.data.requests)
       setHours(result.data.hours)
       setDeadline(result.data.deadline)
-      setDeadlineDay(result.data.deadlineDay)
+      setMonthlyDeadline(result.data.monthlyDeadline)
+      setNowMs(Date.now())
       setEvents(result.data.events)
       setUsual(result.data.usual)
       setEntries(toEntries(result.data.mine))
@@ -252,26 +260,12 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
       staff: staff.map(person => ({ id: person.id, name: person.name, category: person.category })),
       requests: allRequests,
       events,
-      deadline: deadline || requestDeadlineDate(currentMonthStart, deadlineDay),
+      deadline: deadline ? japanParts(deadline.at).date : '',
       isHoliday,
     })
 
     const buffer = await workbook.xlsx.writeBuffer()
     saveAs(new Blob([buffer]), `${targetMonth}月休み希望_${storeId}.xlsx`)
-  }
-
-  const saveDeadlineDay = async () => {
-    setIsSavingStoreInfo(true)
-    const result = await saveRequestDeadlineDay(storeId, deadlineDraft)
-    setIsSavingStoreInfo(false)
-    if (!result.ok) {
-      notify('提出期限を保存できませんでした: ' + result.error, 'error')
-      return
-    }
-    setDeadlineDay(result.data)
-    setDeadline(requestDeadlineDate(currentMonthStart, result.data))
-    setIsEditingDeadline(false)
-    notify(`提出期限を「前月${result.data}日」にしました。`)
   }
 
   const saveEvent = async (date: string, note: string) => {
@@ -320,29 +314,6 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
           <div className="min-w-0">
             <h1 className="text-2xl font-bold text-slate-900">{targetYear}年{targetMonth}月の希望</h1>
             <p className="mt-1 text-sm text-slate-600">{selectedStaff.name} さん</p>
-            {deadline && !isEditingDeadline && (
-              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-slate-600">
-                <span>提出期限 {formatDeadline(deadline)}</span>
-                {isAdmin && (
-                  <button type="button" onClick={() => { setDeadlineDraft(deadlineDay); setIsEditingDeadline(true) }}
-                    className="py-1 text-xs font-bold text-slate-600 underline underline-offset-4">変更</button>
-                )}
-              </p>
-            )}
-            {isAdmin && isEditingDeadline && (
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-700">
-                <label className="flex items-center gap-1">前月
-                  <select value={deadlineDraft} onChange={event => setDeadlineDraft(Number(event.target.value))} disabled={isSavingStoreInfo}
-                    aria-label="提出期限（前月の日）" className="min-h-9 rounded-md border border-slate-300 bg-white px-1.5 text-sm">
-                    {Array.from({ length: 31 }, (_, index) => index + 1).map(day => <option key={day} value={day}>{day}</option>)}
-                  </select>日
-                </label>
-                <button type="button" onClick={() => void saveDeadlineDay()} disabled={isSavingStoreInfo}
-                  className="min-h-9 rounded-md bg-[var(--primary)] px-3 text-xs font-bold text-white hover:bg-[var(--primary-strong)] disabled:bg-slate-300">保存</button>
-                <button type="button" onClick={() => setIsEditingDeadline(false)} disabled={isSavingStoreInfo}
-                  className="min-h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700">やめる</button>
-              </div>
-            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button type="button" onClick={() => changeMonth(-1)} aria-label="前の月" className="flex h-12 w-12 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"><ChevronLeft size={22} /></button>
@@ -350,9 +321,31 @@ export default function RequestsClient({ initialMonth, initial }: { initialMonth
           </div>
         </div>
 
-        {isReadOnly
+        {isMonthReady && !isPastMonth && (
+          <div className="-mt-1 mb-3">
+            <RequestDeadlineBar
+              storeId={storeId}
+              monthStart={currentMonthStart}
+              deadline={deadline}
+              monthly={monthlyDeadline}
+              now={nowMs}
+              canEdit={isAdmin}
+              onSaved={(view, message) => {
+                setDeadline(view.deadline)
+                setMonthlyDeadline(view.monthly)
+                setNowMs(Date.now())
+                notify(message)
+              }}
+              onError={message => notify('提出期限を保存できませんでした: ' + message, 'error')}
+            />
+          </div>
+        )}
+
+        {isPastMonth
           ? <p className="mb-3 text-sm font-bold text-red-700">過去の月のため変更できません。</p>
-          : (
+          : isDeadlineLocked
+            ? <p role="status" className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">{DEADLINE_LOCKED_MESSAGE}</p>
+            : (
             <div className="-mb-1 flex min-h-9 justify-end">
               <button type="button" onClick={() => setMultiSelect(!isMultiSelect)} disabled={!isMonthReady} className="px-1 py-2 disabled:opacity-50 text-[15px] font-bold text-slate-600 underline underline-offset-4">
                 {isMultiSelect ? '複数選択をやめる' : '複数の日を選ぶ'}
